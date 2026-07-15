@@ -145,6 +145,17 @@ class OmniSettingsViewModel: ObservableObject {
     @Published var previousPodDetails: PodDetails?
 
     @Published var controllerId: UInt32
+    
+    @Published var podSessionLogDetails: [PodDetails] = []
+
+    @Published var podSessionLogRetention: PodSessionLogRetention {
+        didSet {
+            self.pumpManager.podSessionLogRetention = podSessionLogRetention
+            // Changing retention may prune entries; refresh what's shown right away.
+            self.podSessionLogDetails = self.pumpManager.podSessionLogDetails
+        }
+    }
+
 
     var timeZone: TimeZone {
         return pumpManager.status.timeZone
@@ -289,6 +300,8 @@ class OmniSettingsViewModel: ObservableObject {
         podDetails = pumpManager.podDetails
         previousPodDetails = pumpManager.previousPodDetails
         controllerId = pumpManager.state.controllerId
+        podSessionLogDetails = pumpManager.podSessionLogDetails
+        podSessionLogRetention = pumpManager.podSessionLogRetention
 
         pumpManager.addPodStateObserver(self, queue: DispatchQueue.main)
         pumpManager.addStatusObserver(self, queue: DispatchQueue.main)
@@ -431,6 +444,16 @@ class OmniSettingsViewModel: ObservableObject {
     func setPodKeepAlive(_ podKeepAlivePreference: PodKeepAlive) {
         self.podKeepAlivePreference = podKeepAlivePreference
         pumpManager.podKeepAlive = podKeepAlivePreference
+    }
+
+    func deletePodSessionLogEntries(at offsets: IndexSet) {
+        pumpManager.deletePodSessionLogEntries(at: offsets)
+        self.podSessionLogDetails = pumpManager.podSessionLogDetails
+    }
+
+    func clearPodSessionLog() {
+        pumpManager.clearPodSessionLog()
+        self.podSessionLogDetails = pumpManager.podSessionLogDetails
     }
 
     func didChangeInsulinType(_ newType: InsulinType?) {
@@ -592,6 +615,7 @@ extension OmniSettingsViewModel: PodStateObserver {
         insulinType = self.pumpManager.insulinType
         podDetails = self.pumpManager.podDetails
         previousPodDetails = self.pumpManager.previousPodDetails
+        podSessionLogDetails = self.pumpManager.podSessionLogDetails
     }
  
     func podConnectionStateDidChange(isConnected: Bool) {
@@ -697,6 +721,13 @@ extension OmniPumpManager {
             return nil
         }
         return podDetails(fromPodState: podState, andDeviceName: nil)
+    }
+
+    // Completed pod sessions currently retained in the session log, most recent first,
+    // for display in PodSessionLogView. Tapping an entry reuses PodDetailsView, same as
+    // the single-slot "Previous Pod" screen.
+    var podSessionLogDetails: [PodDetails] {
+        return state.podSessionLog.map { podDetails(fromPodState: $0, andDeviceName: nil) }
     }
 
 }
