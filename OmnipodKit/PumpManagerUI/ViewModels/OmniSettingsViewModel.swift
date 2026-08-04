@@ -93,7 +93,7 @@ class OmniSettingsViewModel: ObservableObject {
 
     // Expiration reminder date for current pod
     @Published var expirationReminderDate: Date?
-    
+
     var allowedScheduledReminderDates: [Date]? {
         return pumpManager.allowedExpirationReminderDates
     }
@@ -265,7 +265,7 @@ class OmniSettingsViewModel: ObservableObject {
 
     init(pumpManager: OmniPumpManager) {
         self.pumpManager = pumpManager
-        
+
         lifeState = pumpManager.lifeState
         activatedAt = pumpManager.podActivatedAt
         expiresAt = pumpManager.expiresAt
@@ -280,8 +280,8 @@ class OmniSettingsViewModel: ObservableObject {
         podCommState = pumpManager.podCommState
         beepPreference = pumpManager.beepPreference
         silencePodPreference = pumpManager.silencePod ? .enabled : .disabled
-        podKeepAlivePreference = Storage.shared.podKeepAlive.value
         silencePodEnd = pumpManager.silencePodEnd
+        podKeepAlivePreference = Storage.shared.podKeepAlive.value
         hasConnection = pumpManager.hasConnection
         insulinType = pumpManager.insulinType
         podDetails = pumpManager.podDetails
@@ -292,8 +292,6 @@ class OmniSettingsViewModel: ObservableObject {
 
         pumpManager.addPodStateObserver(self, queue: DispatchQueue.main)
         pumpManager.addStatusObserver(self, queue: DispatchQueue.main)
-
-        pumpManager.setSyncSilencePodState(syncSilencePodState)
 
         // Trigger refresh
         pumpManager.getPodStatus() { _ in }
@@ -415,14 +413,6 @@ class OmniSettingsViewModel: ObservableObject {
                 }
                 completion(error)
             }
-        }
-    }
-
-    /// Called by the Omni pump manager after the silencePodEnd reached and silence pod mode disabled.
-    func syncSilencePodState(_ silencePod: Bool, _ silencePodEnd: Date?) {
-        DispatchQueue.main.async {
-            self.silencePodPreference = silencePod ? .enabled : .disabled
-            self.silencePodEnd = silencePodEnd
         }
     }
 
@@ -606,6 +596,8 @@ extension OmniSettingsViewModel: PodStateObserver {
         expirationReminderDate = self.pumpManager.scheduledExpirationReminder
         podCommState = self.pumpManager.podCommState
         beepPreference = self.pumpManager.beepPreference
+        silencePodPreference = self.pumpManager.silencePod ? .enabled : .disabled
+        silencePodEnd = self.pumpManager.silencePodEnd
         insulinType = self.pumpManager.insulinType
         podDetails = self.pumpManager.podDetails
         previousPodDetails = self.pumpManager.previousPodDetails
