@@ -202,6 +202,25 @@ struct OmniSettingsView: View  {
         }
     }
 
+    private var totalDelivered: Double? {
+        viewModel.podDetails?.totalDelivery
+    }
+
+    func totalDeliveredStatus(delivered: Double) -> some View {
+        HStack(alignment: .lastTextBaseline, spacing: 3) {
+            Text(LocalizedString("Total Delivery", comment: "description label for total delivery pod details row"))
+                .foregroundColor(Color(UIColor.secondaryLabel))
+            Spacer()
+            Text(viewModel.totalDeliveryText(for: delivered))
+                .font(.system(size: 22))
+                .fontWeight(.heavy)
+                .foregroundColor(viewModel.podOk ? .primary : .secondary)
+                .fixedSize()
+            Text(viewModel.reservoirVolumeFormatter.localizedUnitStringWithPlurality(forValue: delivered, avoidLineBreaking: true))
+                .foregroundColor(.secondary)
+        }
+    }
+
     var manualTempBasalRow: some View {
         Button(action: {
             self.manualBasalTapped()
@@ -299,6 +318,11 @@ struct OmniSettingsView: View  {
                         deliveryStatus
                         Spacer()
                         reservoirStatus
+                    }
+                    if let delivered = totalDelivered {
+                        Divider()
+                            .padding(.top, 4)
+                        totalDeliveredStatus(delivered: delivered)
                     }
                     if let faultAction = viewModel.recoveryText {
                         Divider()

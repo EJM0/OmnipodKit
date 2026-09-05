@@ -512,6 +512,11 @@ class OmniSettingsViewModel: ObservableObject {
         }
     }
 
+    func totalDeliveryText(for units: Double) -> String {
+        let quantity = HKQuantity(unit: .internationalUnit(), doubleValue: units)
+        return reservoirVolumeFormatter.string(from: quantity, includeUnit: false) ?? ""
+    }
+
     var suspendResumeActionText: String {
         let defaultText = LocalizedString("Suspend Insulin Delivery", comment: "Text for suspend resume button when insulin delivery active")
 
