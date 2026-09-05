@@ -281,7 +281,7 @@ class OmniSettingsViewModel: ObservableObject {
         beepPreference = pumpManager.beepPreference
         silencePodPreference = pumpManager.silencePod ? .enabled : .disabled
         silencePodEnd = pumpManager.silencePodEnd
-        podKeepAlivePreference = Storage.shared.podKeepAlive.value
+        podKeepAlivePreference = pumpManager.podKeepAlive
         hasConnection = pumpManager.hasConnection
         insulinType = pumpManager.insulinType
         podDetails = pumpManager.podDetails
@@ -296,7 +296,7 @@ class OmniSettingsViewModel: ObservableObject {
         // Trigger refresh
         pumpManager.getPodStatus() { _ in }
 
-        if pumpManager.podType.usesRileyLink {
+        if pumpManager.podType.isEros {
             pumpManager.updateRLConnectionStatus()
         }
     }
@@ -433,6 +433,7 @@ class OmniSettingsViewModel: ObservableObject {
 
     func setPodKeepAlive(_ podKeepAlivePreference: PodKeepAlive) {
         self.podKeepAlivePreference = podKeepAlivePreference
+        pumpManager.podKeepAlive = podKeepAlivePreference
     }
 
     func deletePodSessionLogEntries(at offsets: IndexSet) {
