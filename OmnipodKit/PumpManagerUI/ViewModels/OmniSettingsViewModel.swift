@@ -149,6 +149,12 @@ class OmniSettingsViewModel: ObservableObject {
     
     @Published var podSessionLogDetails: [PodDetails] = []
 
+    @Published var defaultPodFillUnits: Double {
+        didSet {
+            self.pumpManager.defaultPodFillUnits = defaultPodFillUnits
+        }
+    }
+
     @Published var podSessionLogRetention: PodSessionLogRetention {
         didSet {
             self.pumpManager.podSessionLogRetention = podSessionLogRetention
@@ -303,6 +309,7 @@ class OmniSettingsViewModel: ObservableObject {
         controllerId = pumpManager.state.controllerId
         podSessionLogDetails = pumpManager.podSessionLogDetails
         podSessionLogRetention = pumpManager.podSessionLogRetention
+        defaultPodFillUnits = pumpManager.defaultPodFillUnits
 
         pumpManager.addPodStateObserver(self, queue: DispatchQueue.main)
         pumpManager.addStatusObserver(self, queue: DispatchQueue.main)

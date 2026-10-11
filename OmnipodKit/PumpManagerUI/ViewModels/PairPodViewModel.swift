@@ -182,9 +182,12 @@ class PairPodViewModel: ObservableObject, Identifiable {
 
     var autoRetryAttempted: Bool
 
+    @Published var fillUnits: Double
+
     init(podPairer: PodPairer) {
         self.podPairer = podPairer
         self.autoRetryAttempted = false
+        self.fillUnits = podPairer.defaultPodFillUnits
         // If resuming, don't wait for the button action
         if podPairer.podCommState == .activating {
             pairAndPrime()
@@ -199,7 +202,7 @@ class PairPodViewModel: ObservableObject, Identifiable {
            state = .priming(finishTime: nil)
         }
 
-        podPairer.pairAndPrimePod { (status) in
+        podPairer.pairAndPrimePod(fillUnits: fillUnits) { (status) in
             DispatchQueue.main.async {
                 switch status {
                 case .failure(let error):
@@ -313,7 +316,8 @@ enum OmniPairingError : LocalizedError {
 }
 
 protocol PodPairer {
-    func pairAndPrimePod(completion: @escaping (PumpManagerResult<TimeInterval>) -> Void)
+    func pairAndPrimePod(fillUnits: Double, completion: @escaping (PumpManagerResult<TimeInterval>) -> Void)
+    var defaultPodFillUnits: Double { get }
     func discardPod(completion: @escaping (Bool) -> ())
     var podCommState: PodCommState { get }
     var podType: PodType { get }
@@ -322,7 +326,7 @@ protocol PodPairer {
 extension OmniPumpManager: PodPairer {
     func discardPod(completion: @escaping (Bool) -> ()) { }
 
-    func pairAndPrimePod(completion: @escaping (PumpManagerResult<TimeInterval>) -> Void) {
-        pairAndPrime(completion: completion)
+    func pairAndPrimePod(fillUnits: Double, completion: @escaping (PumpManagerResult<TimeInterval>) -> Void) {
+        pairAndPrime(fillUnits: fillUnits, completion: completion)
     }
 }
