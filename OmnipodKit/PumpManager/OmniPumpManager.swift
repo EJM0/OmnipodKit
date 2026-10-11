@@ -930,6 +930,17 @@ extension OmniPumpManager {
         }
     }
 
+    var defaultPodFillUnits: Double {
+        set {
+            setState { (state) in
+                state.defaultPodFillUnits = newValue
+            }
+        }
+        get {
+            state.defaultPodFillUnits
+        }
+    }
+
     var defaultLowReservoirReminderValue: Double {
         set {
             setState { (state) in
@@ -1426,7 +1437,7 @@ extension OmniPumpManager {
     // MARK: - Pairing
 
     // Called on the main thread
-    func pairAndPrime(completion: @escaping (PumpManagerResult<TimeInterval>) -> Void) {
+    func pairAndPrime(fillUnits: Double, completion: @escaping (PumpManagerResult<TimeInterval>) -> Void) {
 
         guard state.podType != unknownOmnipodType else {
             completion(.failure(.configuration(OmniPumpManagerError.podTypeNotConfigured)))
@@ -1436,6 +1447,12 @@ extension OmniPumpManager {
         guard let insulinType = insulinType else {
             completion(.failure(.configuration(OmniPumpManagerError.insulinTypeNotConfigured)))
             return
+        }
+
+        if podCommState == .noPod {
+            setState { (state) in
+                state.podFillUnits = fillUnits
+            }
         }
 
         #if targetEnvironment(simulator)

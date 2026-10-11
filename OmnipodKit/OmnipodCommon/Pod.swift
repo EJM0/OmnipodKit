@@ -53,6 +53,9 @@ struct Pod {
     // Reservoir Capacity
     static let reservoirCapacity: Double = 200
 
+    // Minimum fill needed to activate a pod
+    static let minimumFillUnits: Double = 85
+
     // The internal zero basal rate varies between Eros and DASH
     // For Eros its 0.0, for DASH its nearZeroBasalRate
     static let nearZeroBasalRate = 0.01
