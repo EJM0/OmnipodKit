@@ -71,6 +71,10 @@ public struct OmniPumpManagerState: RawRepresentable, Equatable {
     // How long completed pod sessions are kept in podSessionLog before being pruned.
     var podSessionLogRetention: PodSessionLogRetention = .default
 
+    // Insulin a new pod is filled with by default, and what the active pod was filled with.
+    var defaultPodFillUnits: Double = Pod.reservoirCapacity
+    var podFillUnits: Double?
+
     // Indicates that the user has completed initial configuration
     // which means they have configured any parameters, but may not have paired a pod yet.
     var initialConfigurationCompleted: Bool = false
@@ -86,6 +90,20 @@ public struct OmniPumpManagerState: RawRepresentable, Equatable {
             return nil
         }
         return ReservoirLevel(rawValue: level)
+    }
+
+    // The pod's reading, or fill minus everything delivered while it only reports 50+ U.
+    // nil without a reading or once that estimate is no longer above 50 U.
+    public var estimatedReservoirLevel: Double? {
+        guard let measurements = podState?.lastInsulinMeasurements, let level = measurements.reservoirLevel else {
+            return nil
+        }
+        guard level == Pod.reservoirLevelAboveThresholdMagicNumber else {
+            return level
+        }
+        let setupUnits = podState?.setupUnitsDelivered ?? Pod.primeUnits + Pod.cannulaInsertionUnits + Pod.cannulaInsertionUnitsExtra
+        let estimate = (podFillUnits ?? defaultPodFillUnits) - setupUnits - measurements.delivered
+        return estimate > Pod.maximumReservoirReading ? estimate : nil
     }
 
     var podType: PodType
@@ -385,6 +403,9 @@ public struct OmniPumpManagerState: RawRepresentable, Equatable {
             self.podSessionLogRetention = .default
         }
 
+        self.defaultPodFillUnits = rawValue["defaultPodFillUnits"] as? Double ?? Pod.reservoirCapacity
+        self.podFillUnits = rawValue["podFillUnits"] as? Double
+
         if podType.isEros {
             // Some more Eros specific values
             if let pairingAttemptAddress = rawValue["pairingAttemptAddress"] as? UInt32 {
@@ -428,6 +449,8 @@ public struct OmniPumpManagerState: RawRepresentable, Equatable {
         value["previousPodState"] = previousPodState?.rawValue
         value["podSessionLog"] = podSessionLog.map { $0.rawValue }
         value["podSessionLogRetention"] = podSessionLogRetention.rawValue
+        value["defaultPodFillUnits"] = defaultPodFillUnits
+        value["podFillUnits"] = podFillUnits
 
         return value
     }
@@ -515,6 +538,8 @@ extension OmniPumpManagerState: CustomDebugStringConvertible {
             "* podKeepAlive: \(podKeepAlive)",
             "* podSessionLogRetention: \(podSessionLogRetention)",
             "* podSessionLog: \(podSessionLog.count) session(s)",
+            "* defaultPodFillUnits: \(defaultPodFillUnits)",
+            "* podFillUnits: \(optionalString(podFillUnits))",
             "",
         ].joined(separator: "\n")
         if podType.isEros || podKeepAlive == .rileyLink {

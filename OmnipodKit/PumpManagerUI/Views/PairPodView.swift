@@ -48,6 +48,14 @@ struct PairPodView: View {
                     .disabled(viewModel.state.instructionsDisabled)
                 }
                 .padding(.bottom, 8)
+
+                if !viewModel.podIsActivated {
+                    Stepper(value: $viewModel.fillUnits, in: Pod.minimumFillUnits...Pod.reservoirCapacity, step: 5) {
+                        Text(String(format: LocalizedString("Filled with %1$@ U", comment: "Pod fill amount on the pair pod screen (1: units)"), String(format: "%.0f", viewModel.fillUnits)))
+                    }
+                    .disabled(viewModel.state.isProcessing)
+                    .padding(.horizontal)
+                }
             }
             .accessibility(sortPriority: 1)
         }) {

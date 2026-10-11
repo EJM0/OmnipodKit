@@ -600,6 +600,16 @@ struct OmniSettingsView: View  {
                         .foregroundColor(Color.primary)
                 }
 
+                Stepper(value: $viewModel.defaultPodFillUnits, in: Pod.minimumFillUnits...Pod.reservoirCapacity, step: 5) {
+                    HStack {
+                        FrameworkLocalText("Pod Fill Amount", comment: "Text for default pod fill amount stepper")
+                            .foregroundColor(Color.primary)
+                        Spacer()
+                        Text(String(format: "%.0f U", viewModel.defaultPodFillUnits))
+                            .foregroundColor(.secondary)
+                    }
+                }
+
                 NavigationLink(destination: BeepPreferenceSelectionView(initialValue: viewModel.beepPreference, onSave: viewModel.setConfirmationBeeps)) {
                     HStack {
                         FrameworkLocalText("Confidence Reminders", comment: "Text for confidence reminders navigation link")
