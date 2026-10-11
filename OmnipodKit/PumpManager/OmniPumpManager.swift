@@ -269,10 +269,13 @@ public class OmniPumpManager: RileyLinkPumpManager {
             }
 
             if oldValue.podState?.setupProgress != newValue.podState?.setupProgress, newValue.podState?.setupProgress == .completed {
+                let podType = newValue.podType
                 self.pumpDelegate.notify() { (delegate) in
                     let date = Date()
-                    let event = NewPumpEvent(date: date, dose: nil, raw: "Pod Change \(date)".data(using: .utf8)!, title: "Pod Change", type: .replaceComponent(componentType: .pump))
+                    let title = String(format: LocalizedString("Pod Change (%@)", comment: "Pump event title for a newly paired pod (1: pod type)"), podType.description)
+                    let event = NewPumpEvent(date: date, dose: nil, raw: "Pod Change \(date)".data(using: .utf8)!, title: title, type: .replaceComponent(componentType: .pump))
                     delegate?.pumpManager(self, hasNewPumpEvents: [event], lastReconciliation: self.lastSync, replacePendingEvents: false) { _ in }
+                    delegate?.deviceManager(self, recordAnalyticsEvent: "Pod Paired", properties: ["podType": podType.briefName])
                 }
             }
         }
@@ -437,6 +440,7 @@ public class OmniPumpManager: RileyLinkPumpManager {
     private let silentTune = SilentTune()
 
     @objc func appMovedToBackground() {
+        podKeepAliveAppDidEnterBackground()
         /// If using Silent Tune pod keep alives and a pod, starting playing the silent tune.
         if state.podKeepAlive == .silentTune && state.podState != nil {
             silentTune.startPlayer()
@@ -444,6 +448,7 @@ public class OmniPumpManager: RileyLinkPumpManager {
     }
 
     @objc func appMovedToForeground() {
+        podKeepAliveAppWillEnterForeground()
         silentTune.stopPlayer()
     }
 
@@ -1138,7 +1143,7 @@ extension OmniPumpManager {
         }
     }
 
-    // Currently running with an Omnipod 5 "black dot" pod
+    /// Running with a pod that does not have silent beep support (e.g., a "black dot" O5)
     var noSilentBeep: Bool {
         return state.podState?.noSilentBeep == true
     }
@@ -1222,6 +1227,10 @@ extension OmniPumpManager {
 
         self.podComms.handleDiscardedPodDosing(podTime: podTime, reservoirLevel: reservoirLevel?.rawValue)
 
+        if let podState = state.podState {
+            reportPodEnded(podState)
+        }
+
         self.podComms.forgetPod()
 
         self.resetPerPodPumpManagerState()
@@ -1239,6 +1248,45 @@ extension OmniPumpManager {
         } else {
             prepForNewPod()
             completion()
+        }
+    }
+
+    /// Reports the end of a pod's life as a pump event and an analytics event.
+    private func reportPodEnded(_ podState: PodState) {
+        let lifetime: TimeInterval
+        if let faultTime = podState.fault?.faultEventTimeSinceActivation {
+            /// Since the pod has a valid faultEventTimeSinceActivation, use this rather than the pod's time.
+            /// Reset type pod faults return atypical fault time values that will not be considered valid on decode.
+            lifetime = faultTime
+        } else {
+            /// Otherwise use the always increasing podTime to compute the pod’s
+            /// lifetime for reset pod faults, deactivated pods, or discarded pods.
+            let elapsed = -(podState.podTimeUpdated?.timeIntervalSinceNow ?? 0)
+            lifetime = podState.podTime + elapsed
+        }
+        var properties: [AnyHashable: Any] = [
+            "podType": podState.podType.briefName,
+            "lifetimeHours": (lifetime.hours * 10).rounded() / 10,
+        ]
+        if let fault = podState.fault {
+            properties["reason"] = "fault"
+            properties["faultCode"] = String(format: "0x%02X", fault.faultEventCode.rawValue)
+        } else if podState.deliveryStoppedAt != nil {
+            properties["reason"] = "deactivated"
+        } else {
+            properties["reason"] = "discarded"
+        }
+
+        let formatter = DateComponentsFormatter()
+        formatter.allowedUnits = [.day, .hour]
+        formatter.unitsStyle = .abbreviated
+        let title = String(format: LocalizedString("Pod Removed after %@", comment: "Pump event title when a pod ends (1: pod lifetime)"), formatter.string(from: lifetime) ?? "")
+
+        pumpDelegate.notify { (delegate) in
+            let date = Date()
+            let event = NewPumpEvent(date: date, dose: nil, raw: "Pod Removed \(date)".data(using: .utf8)!, title: title)
+            delegate?.pumpManager(self, hasNewPumpEvents: [event], lastReconciliation: self.lastSync, replacePendingEvents: false) { _ in }
+            delegate?.deviceManager(self, recordAnalyticsEvent: "Pod Ended", properties: properties)
         }
     }
 
