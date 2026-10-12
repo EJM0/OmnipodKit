@@ -3286,15 +3286,24 @@ extension OmniPumpManager: PumpManager {
         }
     }
 
-    private func acknowledgeAlertSlots(_ slots: AlertSet) async throws {
+    private func acknowledgeAlertSlots(_ slots: AlertSet, for alert: PumpManagerAlert) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) -> Void in
             self.runSession(withName: "Acknowledge Alert") { (result) in
                 switch result {
                 case .success(let session):
                     self.handleSilencePodEnd(session: session)
+
+                    // A retry from silenceAcknowledgedAlerts may have cleared it already
+                    guard self.state.alertsWithPendingAcknowledgment.contains(alert) else {
+                        continuation.resume()
+                        return
+                    }
                     do {
                         let beepBlock = self.beepMessageBlock(beepType: .beep)
                         let _ = try session.acknowledgeAlerts(alerts: slots, beepBlock: beepBlock)
+                        self.setState { state in
+                            state.alertsWithPendingAcknowledgment.remove(alert)
+                        }
                         continuation.resume()
                     } catch {
                         continuation.resume(throwing: error)
@@ -3335,6 +3344,10 @@ extension OmniPumpManager: PumpManager {
                 self.runSession(withName: "Silence already acknowledged alert") { (result) in
                     switch result {
                     case .success(let session):
+                        // Another queued session may have cleared it already
+                        guard self.state.alertsWithPendingAcknowledgment.contains(alert) else {
+                            return
+                        }
                         do {
                             let _ = try session.acknowledgeAlerts(alerts: AlertSet(slots: [slot]))
                         } catch {
@@ -3550,20 +3563,20 @@ extension OmniPumpManager {
                     let clearsExpirationReminder = self.expiryAlertSupersedesReminder(alert)
                     let slots = AlertSet(slots: clearsExpirationReminder ? [slot, .slot3ExpirationReminder] : [slot])
 
+                    // Loop records the acknowledgement as soon as it is tapped. Persist it here too, before
+                    // the session runs, so that if the app dies while waiting on the pod the next status
+                    // update still clears the pod alert (see silenceAcknowledgedAlerts).
+                    self.setState { state in
+                        state.alertsWithPendingAcknowledgment.insert(alert)
+                    }
+
                     do {
-                        try await self.acknowledgeAlertSlots(slots)
+                        try await self.acknowledgeAlertSlots(slots, for: alert)
                     } catch {
                         // A link that drops mid-command fails the first attempt, and a fresh session usually
                         // succeeds. Retry once before reporting a failure the user can't act on.
                         log.default("Acknowledging %{public}@ failed, retrying once: %{public}@", String(describing: slots), String(describing: error))
-                        do {
-                            try await self.acknowledgeAlertSlots(slots)
-                        } catch {
-                            self.setState { state in
-                                state.alertsWithPendingAcknowledgment.insert(alert)
-                            }
-                            throw error
-                        }
+                        try await self.acknowledgeAlertSlots(slots, for: alert)
                     }
                     self.setState { state in
                         state.activeAlerts.remove(alert)
