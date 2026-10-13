@@ -33,7 +33,9 @@ extension OmniPumpManager {
         // Weak: the timer is a process-wide global, and must not keep this manager alive.
         podKeepAliveTimer = Timer(timeInterval: when, repeats: false) { [weak self] _ in
             guard let self else { return }
+            #if os(iOS)
             podKeepAliveAppInBackground = UIApplication.shared.applicationState == .background
+            #endif
             if self.hasPairedNonFaultedPod, self.podKeepAliveTimerAllowed {
                 print("@@@ timer expired, reading pod status to stay connected at \(self.timeStr(Date()))")
                 self.getPodStatus(canOptimize: false) { _ in }
