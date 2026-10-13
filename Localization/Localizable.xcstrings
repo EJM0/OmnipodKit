@@ -9742,6 +9742,9 @@
         }
       }
     },
+    "blue" : {
+      "comment" : "Tab color for DASH Pods"
+    },
     "Bluetooth error" : {
       "comment" : "Error message description for PeripheralManagerError.cbPeripheralError"
     },
@@ -13480,6 +13483,9 @@
         }
       }
     },
+    "clear" : {
+      "comment" : "Tab color for Classic and Omnipod 5 Pods"
+    },
     "Command error %1$@: %2$@" : {
       "comment" : "Format string for invalid message error code (1: error code number) (2: error description)",
       "extractionState" : "manual",
@@ -15915,6 +15921,9 @@
           }
         }
       }
+    },
+    "Connecting to pod…" : {
+      "comment" : "Status shown while deactivation waits for a pod connection"
     },
     "Connecting to the pod may sometimes take noticeably longer than usual — occasionally up to 30 seconds — while stalled attempts are detected and retried automatically. Commands still complete once the connection is made." : {
       "comment" : "InPlay connection info: what to expect body 1"
@@ -45957,6 +45966,9 @@
         }
       }
     },
+    "Pod Change (%@)" : {
+      "comment" : "Pump event title for a newly paired pod (1: pod type)"
+    },
     "Pod Connections" : {
       "comment" : "Navigation bar title for InPlay connection info view"
     },
@@ -50540,6 +50552,9 @@
           }
         }
       }
+    },
+    "Pod Removed after %@" : {
+      "comment" : "Pump event title when a pod ends (1: pod lifetime)"
     },
     "Pod sent ack instead of response" : {
       "comment" : "Error message shown when pod sends ack instead of response",
@@ -66641,6 +66656,9 @@
     },
     "The key-management server is temporarily unavailable." : {
       "comment" : "O5 fetch: keymanager-reported unavailable, no message"
+    },
+    "The pod is not responding. Still trying…" : {
+      "comment" : "Status shown when a deactivation connection attempt is taking a while"
     },
     "The reminders above will not sound on your device when it is in Silent or Do Not Disturb mode. There are other critical Pod alerts that will sound on your device even when set to Silent or Do Not Disturb mode.\n\nThe Pod will also use audible beeps for all Pod reminders and alerts except when the Pod is Silenced." : {
       "comment" : "Description text for critical alerts",
