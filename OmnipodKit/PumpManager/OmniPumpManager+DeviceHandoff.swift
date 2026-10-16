@@ -253,29 +253,29 @@ extension OmniPumpManager: PumpDeliveryOdometer {
     public var deliveryPulseUnits: Double { Pod.pulseSize }
 
     /// A real status read, bypassing the freshness shortcut in ensureCurrentPumpData.
-    public func refreshDeliveredUnits(completion: @escaping (Bool) -> Void) {
+    public func refreshDeliveredUnits() async -> Bool {
         #if targetEnvironment(simulator)
         // No radio in the simulator: fake the round-trip and stamp a measurement, as jumpStartPod does.
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 1.2) { [weak self] in
-            guard let self = self else { return completion(false) }
-            self.setState { state in
-                if state.podState?.lastInsulinMeasurements == nil {
-                    var pod = state.podState
-                    let delivered = pod?.setupUnitsDelivered ?? Pod.primeUnits
-                    pod?.lastInsulinMeasurements = PodInsulinMeasurements(
-                        insulinDelivered: delivered, reservoirLevel: nil, validTime: Date())
-                    state.updatePodStateFromPodComms(pod)
-                }
+        try? await Task.sleep(nanoseconds: 1_200_000_000)
+        setState { state in
+            if state.podState?.lastInsulinMeasurements == nil {
+                var pod = state.podState
+                let delivered = pod?.setupUnitsDelivered ?? Pod.primeUnits
+                pod?.lastInsulinMeasurements = PodInsulinMeasurements(
+                    insulinDelivered: delivered, reservoirLevel: nil, validTime: Date())
+                state.updatePodStateFromPodComms(pod)
             }
-            self.log.default("refreshDeliveredUnits simulated OK (no radio in the simulator)")
-            completion(true)
         }
+        log.default("refreshDeliveredUnits simulated OK (no radio in the simulator)")
+        return true
         #else
-        getPodStatus(canOptimize: false) { result in
-            if case .success(let status) = result, status != nil {
-                completion(true)
-            } else {
-                completion(false)
+        return await withCheckedContinuation { done in
+            getPodStatus(canOptimize: false) { result in
+                if case .success(let status) = result, status != nil {
+                    done.resume(returning: true)
+                } else {
+                    done.resume(returning: false)
+                }
             }
         }
         #endif
