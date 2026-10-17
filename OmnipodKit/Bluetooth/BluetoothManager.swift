@@ -206,9 +206,14 @@ class BluetoothManager: NSObject {
     /// Drop the pod link so another controller can take it. Clears the command-connect marker first,
     /// as the idle disconnect does, so the foreground keep-alive does not reconnect.
     func releaseConnectionForLoan(uuidString: String) {
-        managerQueue.async { self.commandConnectInFlight = false }
+        managerQueue.async { self.commandConnectInFlight = false; self.loanReleased = true }
         disconnectFromDevice(uuidString: uuidString)
     }
+
+    /// True from a release until the pod is taken back: no command dials the pod meanwhile, including
+    /// a session queued before the release (an unacknowledged command's status read dialed a lent pod
+    /// during the other controller's takeover, 2026-10-16 23:24). managerQueue-isolated.
+    private var loanReleased = false
 
     /// Scan for the pod with this address and adopt the peripheral this device discovers.
     func beginLoanTakeover(podId: UInt32) {
@@ -848,6 +853,7 @@ class BluetoothManager: NSObject {
     
     func connectToDevice(uuidString: String) {
         managerQueue.async {
+            self.loanReleased = false
             self.autoConnectIDs.insert(uuidString)
             // If powered on and peripheral not yet in devices, retrieve it now.
             // This handles the user-terminated app restart where willRestoreState wasn't called.
@@ -1141,6 +1147,11 @@ class BluetoothManager: NSObject {
     /// Start a command (or keep-alive) connect. Must run on managerQueue.
     private func beginCommandConnect(_ peripheral: CBPeripheral) {
         dispatchPrecondition(condition: .onQueue(managerQueue))
+        if loanReleased {
+            log.default("[connectOnDemand] pod released to another controller — not dialing")
+            connectionDelegate?.omnipodLogDeviceEvent("[connectOnDemand] pod released to another controller — not dialing")
+            return
+        }
         if delayedProbeInFlight {
             log.default("[connectOnDemand] command preempts heartbeat probe — cancelling probe")
             connectionDelegate?.omnipodLogDeviceEvent("[connectOnDemand] command preempts heartbeat probe — cancelling probe")
