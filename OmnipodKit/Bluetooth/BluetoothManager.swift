@@ -206,9 +206,14 @@ class BluetoothManager: NSObject {
     /// Drop the pod link so another controller can take it. Clears the command-connect marker first,
     /// as the idle disconnect does, so the foreground keep-alive does not reconnect.
     func releaseConnectionForLoan(uuidString: String) {
-        managerQueue.async { self.commandConnectInFlight = false }
+        managerQueue.async { self.commandConnectInFlight = false; self.loanReleased = true }
         disconnectFromDevice(uuidString: uuidString)
     }
+
+    /// True from a release until the pod is taken back: no command dials the pod meanwhile, including
+    /// a session queued before the release (an unacknowledged command's status read dialed a lent pod
+    /// during the other controller's takeover). managerQueue-isolated.
+    private var loanReleased = false
 
     /// Scan for the pod with this address and adopt the peripheral this device discovers.
     func beginLoanTakeover(podId: UInt32) {
@@ -557,6 +562,7 @@ class BluetoothManager: NSObject {
     /// `isAppForeground` — i.e. no change from the validated connect-on-demand behavior. Read from
     /// managerQueue and cross-queue by PeripheralManager (benign bool race).
     var shouldHoldConnection: Bool {
+        guard holdsConnectionBetweenCommands else { return false }
         if isAppForeground { return true }
         // Eager-gated pods (InPlay + affected iPhone): reconnecting costs a wedge storm, and the pod
         // releases the link itself after ~180s of inactivity anyway — so never tear it down on
@@ -565,6 +571,10 @@ class BluetoothManager: NSObject {
         if let peripheral = keepAlivePeripheral, shouldUseEagerConnect(for: peripheral) { return true }
         return podKeepAliveKeepsConnectedInBackground
     }
+
+    /// False for a pod this controller was handed by another: the link is never held open between
+    /// commands, foreground or Pod Keep Alive, so the controller that handed it over can take it back.
+    var holdsConnectionBetweenCommands = true
 
     /// True once this PROCESS has ever been foregrounded. A [delayedConnect] with everFg=false means
     /// iOS ran this process entirely in the background — proof of a background wake/relaunch the user
@@ -858,6 +868,7 @@ class BluetoothManager: NSObject {
     
     func connectToDevice(uuidString: String) {
         managerQueue.async {
+            self.loanReleased = false
             self.autoConnectIDs.insert(uuidString)
             // If powered on and peripheral not yet in devices, retrieve it now.
             // This handles the user-terminated app restart where willRestoreState wasn't called.
@@ -1152,6 +1163,11 @@ class BluetoothManager: NSObject {
     /// `skipDiscovery` goes straight to the cold connect, for a pod known to be advertising now.
     private func beginCommandConnect(_ peripheral: CBPeripheral, skipDiscovery: Bool = false) {
         dispatchPrecondition(condition: .onQueue(managerQueue))
+        if loanReleased {
+            log.default("[connectOnDemand] pod released to another controller — not dialing")
+            connectionDelegate?.omnipodLogDeviceEvent("[connectOnDemand] pod released to another controller — not dialing")
+            return
+        }
         if delayedProbeInFlight {
             log.default("[connectOnDemand] command preempts heartbeat probe — cancelling probe")
             connectionDelegate?.omnipodLogDeviceEvent("[connectOnDemand] command preempts heartbeat probe — cancelling probe")
@@ -1209,7 +1225,7 @@ class BluetoothManager: NSObject {
     private func enterForeground() {
         dispatchPrecondition(condition: .onQueue(managerQueue))
         isAppForeground = true
-        guard let peripheral = keepAlivePeripheral else { return }
+        guard holdsConnectionBetweenCommands, let peripheral = keepAlivePeripheral else { return }
         switch peripheral.state {
         case .connected, .disconnecting:
             return

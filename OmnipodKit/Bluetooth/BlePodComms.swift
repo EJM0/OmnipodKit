@@ -139,6 +139,11 @@ class BlePodComms: PodComms {
         bluetoothManager = nil
     }
 
+    /// False for a pod handed over by another controller (see BluetoothManager.holdsConnectionBetweenCommands).
+    func setHoldsConnectionBetweenCommands(_ holds: Bool) {
+        bluetoothManager?.holdsConnectionBetweenCommands = holds
+    }
+
     /// Sets bluetoothManager's podKeepAlive value to drive the pod connection policy.
     func setPodKeepAliveKeepsConnectedInBackground(_ keepConnectedInBackground: Bool) {
         print("@@@ setting bluetoothManager.podKeepAliveKeepsConnectedInBackground to \(keepConnectedInBackground)")
