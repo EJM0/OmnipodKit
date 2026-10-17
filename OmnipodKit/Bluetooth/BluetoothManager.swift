@@ -547,9 +547,14 @@ class BluetoothManager: NSObject {
     /// InPlay pods on iPhone 16/17e: holding their link open in the background led to 0xCB (203) pod faults.
     /// Read from managerQueue and cross-queue by PeripheralManager (benign bool race).
     var shouldHoldConnection: Bool {
+        guard holdsConnectionBetweenCommands else { return false }
         if isAppForeground { return true }
         return podKeepAliveKeepsConnectedInBackground
     }
+
+    /// False for a pod this controller was handed by another: the link is never held open between
+    /// commands, foreground or Pod Keep Alive, so the controller that handed it over can take it back.
+    var holdsConnectionBetweenCommands = true
 
     /// True once this PROCESS has ever been foregrounded. A [delayedConnect] with everFg=false means
     /// iOS ran this process entirely in the background — proof of a background wake/relaunch the user
@@ -1200,7 +1205,7 @@ class BluetoothManager: NSObject {
     private func enterForeground() {
         dispatchPrecondition(condition: .onQueue(managerQueue))
         isAppForeground = true
-        guard let peripheral = keepAlivePeripheral else { return }
+        guard holdsConnectionBetweenCommands, let peripheral = keepAlivePeripheral else { return }
         switch peripheral.state {
         case .connected, .disconnecting:
             return
