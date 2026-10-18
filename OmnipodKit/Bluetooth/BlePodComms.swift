@@ -62,6 +62,10 @@ class BlePodComms: PodComms {
         bluetoothManager.beginLoanTakeover(podId: podId)
     }
 
+    /// A session that finds another controller's use after this date is refused, so this one never
+    /// commands a pod the other may be dosing with. Stored per communications instance.
+    var refusesForeignSessionsSince: Date?
+
     /// After `delay`, scan for the pod by address if `stillWaiting` still returns the link's
     /// diagnostics (nil: the pod answered or control was released). A later take replaces it.
     func scheduleTakeEscalation(podId: UInt32, after delay: TimeInterval, stillWaiting: @escaping () -> String?) {
@@ -380,6 +384,7 @@ class BlePodComms: PodComms {
                 // Any resync counts: after a single foreign session the pod's counter equals the one just sent.
                 let pending = podState!.unacknowledgedCommand
                 if podState!.resolveAfterSessionResync() {
+                    podState!.lastForeignSessionAt = Date()
                     let dropped = pending.map { " · unconfirmed \($0) dropped, nothing booked" } ?? ""
                     omnipodLogDeviceEvent("[trust] EAP SQN RESYNC — pod=\(podSqn) ours=\(eapSeq): another controller may have run this shared pod [sqn-resync]\(dropped)")
                 }
@@ -799,6 +804,15 @@ class BlePodComms: PodComms {
             guard !(self.hasLTK && self.needsSessionEstablishment) else {
                 self.log.error("Session '%{public}@' refused: no session established on this connection", name)
                 block(.failure(PodCommsError.podNotConnected))
+                return
+            }
+
+            // checked once the handshake ran, which is where another controller's sessions show
+            if let since = self.refusesForeignSessionsSince, let foreignAt = self.podState?.lastForeignSessionAt,
+               foreignAt > since
+            {
+                self.omnipodLogDeviceEvent("[trust] session '\(name)' refused: another controller used the pod since \(since)")
+                block(.failure(PodCommsError.diagnosticMessage(str: "Another controller has used this pod")))
                 return
             }
 

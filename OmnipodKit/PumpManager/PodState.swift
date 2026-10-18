@@ -147,6 +147,9 @@ public struct PodState: RawRepresentable, Equatable, CustomDebugStringConvertibl
     /// pod. Only then does a session resync mean another controller ran it; a pod never shared
     /// resyncs as before. Kept for the pod's life.
     var sharedWithAnotherController: Bool = false
+    /// When a session resync last showed that another controller ran this shared pod (`resolveAfterSessionResync`).
+    /// Persisted, so a relaunch still knows it; `refusesForeignSessionsSince` refuses sessions after it.
+    var lastForeignSessionAt: Date?
 
 
     init(
@@ -664,6 +667,7 @@ public struct PodState: RawRepresentable, Equatable, CustomDebugStringConvertibl
 
         self.untrackedDeliveryIsForeign = rawValue["untrackedDeliveryIsForeign"] as? Bool ?? false
         self.sharedWithAnotherController = rawValue["sharedWithAnotherController"] as? Bool ?? false
+        self.lastForeignSessionAt = rawValue["lastForeignSessionAt"] as? Date
 
         if let podTypeRaw = rawValue["podType"] as? UInt8 {
             self.podType = PodType(rawValue: podTypeRaw)
@@ -771,6 +775,9 @@ public struct PodState: RawRepresentable, Equatable, CustomDebugStringConvertibl
         }
         if sharedWithAnotherController {
             rawValue["sharedWithAnotherController"] = true
+        }
+        if let lastForeignSessionAt {
+            rawValue["lastForeignSessionAt"] = lastForeignSessionAt
         }
 
         if configuredAlerts.count > 0 {
