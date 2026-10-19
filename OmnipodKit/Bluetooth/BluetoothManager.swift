@@ -210,14 +210,43 @@ class BluetoothManager: NSObject {
 
     /// Drop the pod link so another controller can take it. Clears the command-connect marker first,
     /// as the idle disconnect does, so the foreground keep-alive does not reconnect.
+    /// A command already under way finishes first, bounded by `loanReleaseWaitLimit`: released in the
+    /// middle of an exchange, the pod was left answering nobody and accepted no session until it was
+    /// restarted, and whether it took the command was unknown. No new command dials meanwhile.
     func releaseConnectionForLoan(uuidString: String) {
-        managerQueue.async { self.commandConnectInFlight = false; self.loanReleased = true }
+        managerQueue.async {
+            self.commandConnectInFlight = false
+            self.loanReleased = true
+            guard self.hasActiveCommandSession else {
+                self.disconnectFromDevice(uuidString: uuidString)
+                return
+            }
+            self.pendingLoanRelease = uuidString
+            self.log.default("[release] a command is under way — releasing the pod when it finishes")
+            self.connectionDelegate?.omnipodLogDeviceEvent("[release] a command is under way — releasing the pod when it finishes")
+            self.managerQueue.asyncAfter(deadline: .now() + BluetoothManager.loanReleaseWaitLimit) { [weak self] in
+                self?.finishPendingLoanRelease(why: "wait limit reached")
+            }
+        }
+    }
+
+    /// Longest a release waits for a command under way; a command's own timeouts end it sooner.
+    static let loanReleaseWaitLimit: TimeInterval = 20
+
+    /// The pod a release is waiting to let go of. managerQueue-isolated.
+    private var pendingLoanRelease: String?
+
+    private func finishPendingLoanRelease(why: String) {
+        dispatchPrecondition(condition: .onQueue(managerQueue))
+        guard let uuidString = pendingLoanRelease else { return }
+        pendingLoanRelease = nil
+        connectionDelegate?.omnipodLogDeviceEvent("[release] releasing the pod — \(why)")
         disconnectFromDevice(uuidString: uuidString)
     }
 
     /// True from a release until the pod is taken back: no command dials the pod meanwhile, including
-    /// a session queued before the release (an unacknowledged command's status read dialed a lent pod
-    /// during the other controller's takeover, 2026-10-16 23:24). managerQueue-isolated.
+    /// a session queued before the release (an unacknowledged command's status read could dial a lent
+    /// pod during the other controller's takeover). managerQueue-isolated.
     private var loanReleased = false
 
     /// Scan for the pod with this address and adopt the peripheral this device discovers.
@@ -547,6 +576,8 @@ class BluetoothManager: NSObject {
 
     func endCommandSession() {
         lockedActiveCommandSessions.mutate { $0 = max(0, $0 - 1) }
+        guard !hasActiveCommandSession else { return }
+        managerQueue.async { self.finishPendingLoanRelease(why: "the command finished") }
     }
 
     /// True while the app is foregrounded. While foreground we keep the pod connected (skip the
@@ -879,6 +910,8 @@ class BluetoothManager: NSObject {
     func connectToDevice(uuidString: String) {
         managerQueue.async {
             self.loanReleased = false
+            // Taken back before a waiting release landed: the release is void.
+            self.pendingLoanRelease = nil
             self.autoConnectIDs.insert(uuidString)
             // If powered on and peripheral not yet in devices, retrieve it now.
             // This handles the user-terminated app restart where willRestoreState wasn't called.
