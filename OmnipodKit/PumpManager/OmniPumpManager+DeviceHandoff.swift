@@ -159,14 +159,18 @@ extension OmniPumpManager: ExclusiveDeviceControl {
         }
     }
 
-    /// Takes the pod back after a release, or starts the search an adopted manager needs.
+    /// Lifts a release, then connects: by the handle this device has, or by the search an adopted
+    /// manager needs. It connects with or without a release here: another controller can take the pod
+    /// without this one releasing it (a watch's offline start), and the take's settle waits for this
+    /// link.
     public func takeControl() {
         if state.podConnectionReleased {
             resumeControl()
-            (podComms as? BlePodComms)?.rearmConnection()
         }
         if takeControlNeedsSearch, let address = state.podState?.address {
             (podComms as? BlePodComms)?.beginTakeoverSearch(podId: address)
+        } else {
+            (podComms as? BlePodComms)?.rearmConnection()
         }
     }
 
