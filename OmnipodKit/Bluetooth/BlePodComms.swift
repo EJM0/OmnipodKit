@@ -112,9 +112,11 @@ class BlePodComms: PodComms {
     func rearmConnection() {
         if let bleIdentifier = podState?.bleIdentifier {
             bluetoothManager.connectToDevice(uuidString: bleIdentifier)
-            // Under connect-on-demand, connectToDevice does not dial a known peripheral, so dial here.
+            // Under connect-on-demand, connectToDevice does not dial a known peripheral, so dial here;
+            // not one already connected (a take-back's link): its didConnect would drop the session.
             if BluetoothManager.connectOnDemandEnabled,
-               let pm = bluetoothManager.peripheralManager(forIdentifier: bleIdentifier) {
+               let pm = bluetoothManager.peripheralManager(forIdentifier: bleIdentifier),
+               pm.peripheral.state != .connected {
                 bluetoothManager.connectOnDemand(pm.peripheral)
             }
         }
