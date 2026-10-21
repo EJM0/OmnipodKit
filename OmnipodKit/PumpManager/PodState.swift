@@ -135,6 +135,10 @@ public struct PodState: RawRepresentable, Equatable, CustomDebugStringConvertibl
 
     var lastDeliveryStatusReceived: DeliveryStatus? // this variable is not persistent across app restarts
 
+    /// When the bolus the pod reported giving at its last status will end, whoever started it.
+    /// Not persistent, like the delivery status it comes from.
+    var reportedBolusEndsAt: Date?
+
     /// Untracked delivery may be another controller's, so none is booked. Set on adopt, take-back or
     /// a foreign session; cleared once the pod shows no bolus running.
     var untrackedDeliveryIsForeign: Bool = false
@@ -400,6 +404,7 @@ public struct PodState: RawRepresentable, Equatable, CustomDebugStringConvertibl
 
         // save the current pod delivery state for verification before any insulin delivery command
         self.lastDeliveryStatusReceived = deliveryStatus
+        reportedBolusEndsAt = deliveryStatus.bolusing ? date.addingTimeInterval(bolusNotDelivered / Pod.bolusDeliveryRate) : nil
 
         // See if the pod's deliveryStatus indicates some insulin delivery that podState isn't tracking
         if !deliveryStatus.bolusing {

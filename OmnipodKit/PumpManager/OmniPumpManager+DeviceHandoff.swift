@@ -119,6 +119,7 @@ extension PodState {
     /// and with `dropInFlight` drop the in-flight copies so the pod's status resolves them.
     mutating func resolveAfterForeignControl(dropInFlight: Bool) {
         lastDeliveryStatusReceived = nil
+        reportedBolusEndsAt = nil
         untrackedDeliveryIsForeign = true
         if dropInFlight {
             unfinalizedBolus = nil
@@ -260,6 +261,12 @@ extension OmniPumpManager: PumpDeliveryOdometer {
     }
 
     public var deliveryPulseUnits: Double { Pod.pulseSize }
+
+    /// From the pod's own status, so it includes a bolus another controller started.
+    public var bolusUnderWayEndsAt: Date? {
+        guard let endsAt = state.podState?.reportedBolusEndsAt, endsAt > Date() else { return nil }
+        return endsAt
+    }
 
     /// A real status read, bypassing the freshness shortcut in ensureCurrentPumpData.
     public func refreshDeliveredUnits() async -> Bool {

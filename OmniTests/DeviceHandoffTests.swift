@@ -220,6 +220,25 @@ final class DeviceHandoffTests: XCTestCase {
         XCTAssertFalse(pod.untrackedDeliveryIsForeign)
     }
 
+    /// A controller taking the pod back asks whether the pod is giving a bolus. Its own record has
+    /// none (the other controller started it); the pod's status says so, and when it ends.
+    func testAfterATakeThePodsStatusSaysWhenAnotherControllersBolusEnds() throws {
+        var state = makeState()
+        state.releaseControl()
+        var pod = try XCTUnwrap(state.podState)
+        pod.resolveAfterForeignControl(dropInFlight: state.inFlightDosesInheritedAway)
+        XCTAssertNil(pod.reportedBolusEndsAt, "nothing known until the pod is read")
+
+        let readAt = Date()
+        pod.updateFromStatusResponse(status(.bolusInProgress, bolusNotDelivered: 0.8), at: readAt)
+        XCTAssertNil(pod.unfinalizedBolus, "still not booked as this controller's")
+        let endsAt = try XCTUnwrap(pod.reportedBolusEndsAt)
+        XCTAssertEqual(endsAt.timeIntervalSince(readAt), 0.8 / Pod.bolusDeliveryRate, accuracy: 0.01, "the pod's own rate")
+
+        pod.updateFromStatusResponse(status(.scheduledBasal))
+        XCTAssertNil(pod.reportedBolusEndsAt, "finished")
+    }
+
     func testAReleaseWithNothingInFlightKeepsTheFinishedRecords() throws {
         var pod = makePodState()
         pod.unfinalizedBolus = nil
