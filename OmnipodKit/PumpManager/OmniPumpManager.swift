@@ -353,8 +353,8 @@ public class OmniPumpManager: RileyLinkPumpManager {
         let rileyLinkIsInUse = self.state.podType.isEros || self.state.podKeepAlive == .rileyLink
         if rileyLinkIsInUse {
             rileyLinkDeviceProvider.timerTickEnabled =
-                self.state.isPumpDataStale || mustProvide || /// RL ticks needed for traditional BLE wakups
-                self.state.podKeepAlive == .rileyLink // RL ticks needed for PodKeepAlive rileyLink option
+                self.state.isPumpDataStale || mustProvide || /// RL ticks needed for traditional BLE wakeups
+                self.state.podKeepAlive == .rileyLink /// RL ticks needed for PodKeepAlive rileyLink option
         } else {
             provideHeartbeat = mustProvide
             // BLE pod: when the host needs us to provide the heartbeat (e.g. a CGM that can't), run the
@@ -1023,9 +1023,9 @@ extension OmniPumpManager {
 
     /// Signal loss is defined as not having seen a pod response in over 12 minutes.
     private func isSignalLost(at date: Date, lastPodUpdate: Date?) -> Bool {
-       let timeSinceLastResponse = date.timeIntervalSince(lastPodUpdate ?? .distantPast)
-       return timeSinceLastResponse > .minutes(12)
-   }
+        let timeSinceLastResponse = date.timeIntervalSince(lastPodUpdate ?? .distantPast)
+        return timeSinceLastResponse > .minutes(12)
+    }
 
     func isRunningManualTempBasal(for state: OmniPumpManagerState) -> Bool {
         if let tempBasal = state.podState?.unfinalizedTempBasal, !tempBasal.isFinished(), !tempBasal.automatic {

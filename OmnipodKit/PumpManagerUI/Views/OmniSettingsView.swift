@@ -670,7 +670,7 @@ struct OmniSettingsView: View  {
                             Text(localizedPodKeepAliveStr)
                                 .foregroundColor(Color.primary)
                             Spacer()
-                            Text(viewModel.podKeepAlivePreference.title)
+                            Text(viewModel.podKeepAlivePreference.displayTitle)
                                 .foregroundColor(Color.secondary)
                         }
                     }
