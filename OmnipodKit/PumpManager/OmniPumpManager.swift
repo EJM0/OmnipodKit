@@ -97,6 +97,14 @@ public class OmniPumpManager: RileyLinkPumpManager {
         state.podState?.localizedFaultDescription
     }
 
+    /// For a host whose pod shares one radio with another link (a watch reading a G7): while this returns more than
+    /// 0, a pod command's connect waits, at most 15 s. nil (the default) connects at once. Called on the Bluetooth
+    /// manager's queue. See `BluetoothManager.commandConnectDelay`.
+    public static var commandConnectDelay: (() -> TimeInterval)? {
+        get { BluetoothManager.commandConnectDelay }
+        set { BluetoothManager.commandConnectDelay = newValue }
+    }
+
     // This string should match the PumpManagerIdentifier string.
     public let pluginIdentifier: String = "Omni"
 

@@ -323,6 +323,15 @@ class BluetoothManager: NSObject {
         UserDefaults.standard.object(forKey: "OmnipodKit.advertisementMonitorEnabled") as? Bool ?? true
     }
 
+    /// How long a pod command's connect should still wait for another link on the same radio (0 or nil: connect
+    /// now), set by the host through `OmniPumpManager.commandConnectDelay`. Called on managerQueue. On a watch
+    /// reading a G7, every pod stall began with a pod command cut off while the sensor's link was up (2026-10-23:
+    /// 12 of 48 pod connects came at the sensor's link-up, the one at 12:40:56 started a stall).
+    static var commandConnectDelay: (() -> TimeInterval)?
+    /// How long a command connect waits at most, then connects anyway.
+    static let commandConnectDelayLimit: TimeInterval = 15
+    private var commandConnectDeferredSince: Date?
+
     /// The shipped "normally disconnected" model: the pod is NOT held connected; PeripheralManager
     /// connects on demand for each session and disconnects when idle, and we alarm-scan while
     /// disconnected. Every command pays a (fast fresh-discovery) connect first.
@@ -1230,6 +1239,26 @@ class BluetoothManager: NSObject {
         if loanReleased {
             log.default("[connectOnDemand] pod released to another controller — not dialing")
             return
+        }
+        if let delay = BluetoothManager.commandConnectDelay?(), delay > 0 {
+            let since = commandConnectDeferredSince ?? Date()
+            if commandConnectDeferredSince == nil {
+                commandConnectDeferredSince = since
+                log.default("[connectOnDemand] waiting for the host's other link to close")
+                connectionDelegate?.omnipodLogDeviceEvent("[connectOnDemand] waiting for the host's other link to close")
+            }
+            if Date().timeIntervalSince(since) < BluetoothManager.commandConnectDelayLimit {
+                managerQueue.asyncAfter(deadline: .now() + min(delay, 0.5)) { [weak self] in
+                    self?.beginCommandConnect(peripheral)
+                }
+                return
+            }
+        }
+        if let since = commandConnectDeferredSince {
+            commandConnectDeferredSince = nil
+            let waited = String(format: "%.1f", Date().timeIntervalSince(since))
+            log.default("[connectOnDemand] waited %{public}@ s for the host's other link", waited)
+            connectionDelegate?.omnipodLogDeviceEvent("[connectOnDemand] waited \(waited) s for the host's other link")
         }
         if delayedProbeInFlight {
             log.default("[connectOnDemand] command preempts heartbeat probe — cancelling probe")
