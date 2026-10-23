@@ -65,6 +65,10 @@ extension OmniPumpManagerState {
     /// The export: facts about the pod, none of this controller's relationship to it.
     func sharedConfiguration(managerIdentifier: String) -> SharedDeviceConfiguration {
         var shared = self
+        // only the pod in use: the pod history stays on the phone, which logs a pod ended on the watch itself
+        // (`forgetPodEndedElsewhere`). With 90 days of whole pods it went with every grant.
+        shared.previousPodState = nil
+        shared.podSessionLog = []
         shared.podConnectionReleased = false
         shared.refusesForeignSessionsSince = nil
         shared.configuredByAnotherController = false
@@ -82,6 +86,9 @@ extension OmniPumpManagerState {
     /// identities, and delivery this controller did not command is not booked.
     func adopted(handle: String?) -> OmniPumpManagerState {
         var state = self
+        // an export from before it left them out: the history is the phone's
+        state.previousPodState = nil
+        state.podSessionLog = []
         var pod = podState?.sharedFacts
         pod?.bleIdentifier = handle
         pod?.untrackedDeliveryIsForeign = true
