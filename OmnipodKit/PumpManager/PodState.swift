@@ -680,7 +680,7 @@ public struct PodState: RawRepresentable, Equatable, CustomDebugStringConvertibl
                 self.bleIdentifier = bleIdentifier
             }
             if self.ltk == nil, rawValue["ltk"] != nil {
-                os_log("PodState decode: ltk present in rawValue but did not decode — every pod command will fail", log: log, type: .error)
+                log.error("PodState decode: ltk present in rawValue but did not decode — every pod command will fail")
             }
 
             if podType.isO5 {
