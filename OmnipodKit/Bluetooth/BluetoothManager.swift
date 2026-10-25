@@ -123,6 +123,13 @@ class BluetoothManager: NSObject {
     /// This manager's connect and disconnect edges (`ConnectClock`).
     let connectClock = ConnectClock()
 
+    /// Routine motion (scan markers, connect errors and teardowns, pairing chatter) goes to the
+    /// system log only; the device log, which goes with a user's report, keeps what changes who
+    /// controls the pod or explains a failure.
+    private func logRoutine(_ text: String) {
+        log.default("%{public}@", text)
+    }
+
     private let podType: PodType
 
     private let log = OSLog(category: "BluetoothManager")
@@ -168,7 +175,7 @@ class BluetoothManager: NSObject {
             guard oldValue != loanTakeoverPodId else { return }
             let from = oldValue.map { String(format: "0x%x", $0) } ?? "nil"
             let to = loanTakeoverPodId.map { String(format: "0x%x", $0) } ?? "nil"
-            connectionDelegate?.omnipodLogDeviceEvent("[loan-scan] marker \(from) -> \(to) (\(loanScanMarkerReason))")
+            logRoutine("[loan-scan] marker \(from) -> \(to) (\(loanScanMarkerReason))")
         }
     }
 
@@ -1222,7 +1229,6 @@ class BluetoothManager: NSObject {
         dispatchPrecondition(condition: .onQueue(managerQueue))
         if loanReleased {
             log.default("[connectOnDemand] pod released to another controller — not dialing")
-            connectionDelegate?.omnipodLogDeviceEvent("[connectOnDemand] pod released to another controller — not dialing")
             return
         }
         if delayedProbeInFlight {
@@ -1257,7 +1263,7 @@ class BluetoothManager: NSObject {
         if loanTakeoverPodId != nil {
             if !manager.isScanning { startScanning() }
             log.default("[connectOnDemand] takeover in progress — the takeover scan connects (%{public}@)", peripheral.identifier.uuidString)
-            connectionDelegate?.omnipodLogDeviceEvent("[connectOnDemand] takeover: the takeover scan connects")
+            logRoutine("[connectOnDemand] takeover: the takeover scan connects")
             return
         }
         connectForCommand(peripheral)
@@ -1377,13 +1383,13 @@ class BluetoothManager: NSObject {
             // While a takeover scan is armed, a command error must not cancel the pending connect:
             // the error belongs to the command, and the connect is the recovery about to land.
             if site == "connectError", self.loanTakeoverPodId != nil {
-                self.connectionDelegate?.omnipodLogDeviceEvent(
+                logRoutine(
                     "[connectOnDemand] connect-command error (\(detail ?? "unknown")) during an armed takeover — any pending connect is left in place")
                 return
             }
             self.commandConnectInFlight = false
             self.log.default("[connectOnDemand] central.cancel on managerQueue for %{public}@ (site=%{public}@)", peripheral.identifier.uuidString, site)
-            if let detail { self.connectionDelegate?.omnipodLogDeviceEvent("[connectOnDemand] teardown by \(site): \(detail)") }
+            if let detail { logRoutine("[connectOnDemand] teardown by \(site): \(detail)") }
             self.manager.cancelPeripheralConnection(peripheral)
         }
     }
@@ -1405,7 +1411,7 @@ class BluetoothManager: NSObject {
             let filterSource = podType.isO5
                 ? (uuidPdmId != nil ? "O5/pdm-derived" : "O5/profile-fallback")
                 : "profile(\(String(describing: podType)))"
-            connectionDelegate?.omnipodLogDeviceEvent(
+            logRoutine(
                 "[\(reason)] scan started (filter=\(serviceUUID.uuidString) via \(filterSource))")
             manager.scanForPeripherals(withServices: services, options: options)
             return
@@ -1760,7 +1766,7 @@ extension BluetoothManager: CBCentralManagerDelegate {
                 timedConnect(peripheral)  // takeover — an explicit connect, not auto-reconnect
             } else {
                 if discoveryModeEnabled {
-                    connectionDelegate?.omnipodLogDeviceEvent("[pairing] heard pod \(peripheral.identifier.uuidString) pairable=\(podAdvertisement.pairable) state=\(peripheral.state.rawValue)")
+                    logRoutine("[pairing] heard pod \(peripheral.identifier.uuidString) pairable=\(podAdvertisement.pairable) state=\(peripheral.state.rawValue)")
                 }
                 if discoveryModeEnabled && podAdvertisement.pairable {
                     // Stop the scan so it doesn't starve the connect, then connect if disconnected.
@@ -1768,7 +1774,7 @@ extension BluetoothManager: CBCentralManagerDelegate {
                     if manager.isScanning { manager.stopScan() }
                     if peripheral.state == .disconnected {
                         log.default("Connecting to pairable device %{public}@ in discovery mode", peripheral)
-                        connectionDelegate?.omnipodLogDeviceEvent("[pairing] connecting to pairable pod \(peripheral.identifier.uuidString)")
+                        logRoutine("[pairing] connecting to pairable pod \(peripheral.identifier.uuidString)")
                         timedConnect(peripheral)
                     }
                 } else if autoConnectIDs.contains(peripheral.identifier.uuidString) && peripheral.state == .disconnected {
@@ -2015,7 +2021,7 @@ extension BluetoothManager: CBCentralManagerDelegate {
         if pendingAdoptedLoanPod == peripheral.identifier.uuidString {
             pendingAdoptedLoanPod = nil
             let code = (error as NSError?).map { "\($0.domain)#\($0.code)" } ?? "no-error"
-            connectionDelegate?.omnipodLogDeviceEvent(
+            logRoutine(
                 "[loan-scan] adoption connect FAILED (\(code)) — marker HELD, scan stays armed for the next advert")
         }
         // Under active watchdog: defer reconnection to it (don't start the idle scan / probe here, which
