@@ -338,6 +338,61 @@ final class DeviceHandoffTests: XCTestCase {
         XCTAssertNotNil(pod.unacknowledgedCommand)
     }
 
+    // MARK: - Another controller's sessions
+
+    func testAReleaseRefusesSessionsAnotherControllerStartsFromThen() throws {
+        var state = makeState()
+        XCTAssertNil(state.refusesForeignSessionsSince, "nothing refused while this controller holds the pod")
+
+        state.releaseControl()
+        let since = try XCTUnwrap(state.refusesForeignSessionsSince)
+
+        state.releaseControl()
+        XCTAssertEqual(state.refusesForeignSessionsSince, since, "a second release keeps the first one's date")
+    }
+
+    func testTheRefusalIsNeitherExportedNorAdopted() throws {
+        var state = makeState()
+        state.refusesForeignSessionsSince = Date()
+        let configuration = export(state)
+        XCTAssertNil(configuration.state["refusesForeignSessionsSince"], "the refusal is this controller's")
+
+        var shared = configuration.state
+        shared["refusesForeignSessionsSince"] = Date()
+        let adopted = try adopt(SharedDeviceConfiguration(managerIdentifier: "Omni", asOf: configuration.asOf,
+                                                          deliveredUnits: configuration.deliveredUnits, state: shared))
+        XCTAssertNil(adopted.refusesForeignSessionsSince, "nor taken over from another controller's export")
+    }
+
+    func testTheRefusalSurvivesARelaunch() throws {
+        var state = makeState()
+        state.releaseControl()
+        let relaunched = try XCTUnwrap(OmniPumpManagerState(rawValue: state.rawValue))
+        XCTAssertEqual(relaunched.refusesForeignSessionsSince, state.refusesForeignSessionsSince)
+
+        // a release saved before the refusal existed refuses every other controller's session
+        var saved = state.rawValue
+        saved.removeValue(forKey: "refusesForeignSessionsSince")
+        let older = try XCTUnwrap(OmniPumpManagerState(rawValue: saved))
+        XCTAssertEqual(older.refusesForeignSessionsSince, .distantPast)
+    }
+
+    // MARK: - Only the pod in use travels
+
+    func testTheExportLeavesOutThePreviousPod() throws {
+        var state = makeState()
+        state.previousPodState = makePodState()
+        let configuration = export(state)
+        XCTAssertNil(configuration.state["previousPodState"], "the previous pod's history stays with this controller")
+
+        var shared = configuration.state
+        shared["previousPodState"] = makePodState().rawValue
+        let adopted = try adopt(SharedDeviceConfiguration(managerIdentifier: "Omni", asOf: configuration.asOf,
+                                                          deliveredUnits: configuration.deliveredUnits, state: shared))
+        XCTAssertNil(adopted.previousPodState, "an export from before that carried it adopts without it")
+        XCTAssertTrue(adopted.configuredByAnotherController, "the flag that turns the timer keep-alive off")
+    }
+
     // MARK: - Untracked delivery (stock behaviour unchanged)
 
     func testAnUntrackedBolusIsStillBookedWhenNoOtherControllerIsInPlay() {
