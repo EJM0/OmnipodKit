@@ -21,10 +21,16 @@ import os.log
 
 extension OmniPumpManager: DeviceConfigurationSharing {
 
-    /// Marks the pod shared: another controller may run it from this copy.
+    /// Marks the pod shared: another controller may run it from this copy. From then on, while this controller
+    /// still holds the pod, a session after another controller's is refused (`refusesForeignSessionsSince`): the
+    /// other may start from the copy while this one is out of reach, and this one must not dose alongside it until
+    /// it has let go or taken control back.
     public func exportConfiguration() -> SharedDeviceConfiguration {
         if state.podState?.sharedWithAnotherController == false {
             podComms.markSharedWithAnotherController()
+        }
+        if !state.podConnectionReleased, state.refusesForeignSessionsSince == nil {
+            refusesForeignSessionsSince = Date()
         }
         return state.sharedConfiguration(managerIdentifier: pluginIdentifier)
     }

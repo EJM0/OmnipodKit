@@ -377,6 +377,15 @@ final class DeviceHandoffTests: XCTestCase {
         XCTAssertEqual(older.refusesForeignSessionsSince, .distantPast)
     }
 
+    func testTheForeignSessionTimeSurvivesARelaunch() throws {
+        var pod = makePodState()
+        XCTAssertNil(pod.lastForeignSessionAt)
+        let at = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        pod.lastForeignSessionAt = at
+        let relaunched = try XCTUnwrap(PodState(rawValue: pod.rawValue))
+        XCTAssertEqual(relaunched.lastForeignSessionAt, at, "a relaunch still knows another controller ran the pod")
+    }
+
     // MARK: - Only the pod in use travels
 
     func testTheExportLeavesOutThePreviousPod() throws {
