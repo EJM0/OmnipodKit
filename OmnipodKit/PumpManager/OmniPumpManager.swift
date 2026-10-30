@@ -1350,6 +1350,16 @@ extension OmniPumpManager {
 
     // MARK: Testing
 
+    /// The simulator has no Bluetooth, so pod commands are mocked there (next-dev's `mocksPod`, without the
+    /// ImpossiBLE bridge `dev` doesn't have).
+    var mocksPod: Bool {
+        #if targetEnvironment(simulator)
+        return true
+        #else
+        return false
+        #endif
+    }
+
     #if targetEnvironment(simulator)
     private func jumpStartPod(address: UInt32, lotNo: UInt32, lotSeq: UInt32, fault: DetailedStatus? = nil, startDate: Date? = nil, mockFault: Bool) {
         let start = startDate ?? Date()
