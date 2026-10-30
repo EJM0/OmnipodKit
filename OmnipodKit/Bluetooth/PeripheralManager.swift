@@ -40,6 +40,9 @@ class PeripheralManager: NSObject {
 
     var idleStart: Date? = nil
 
+    /// When an on-demand connect last timed out. Sessions queued before then don't wait on another.
+    var lastConnectFailure: Date? = nil
+
     var needsReconnection: Bool {
         guard let start = idleStart else { return false }
 
@@ -127,22 +130,33 @@ protocol PeripheralManagerDelegate: AnyObject {
 // MARK: - Operation sequence management
 extension PeripheralManager {
 
-    func configureAndRun(_ block: @escaping (_ manager: PeripheralManager) -> Void) -> (() -> Void) {
+    func configureAndRun(_ block: @escaping (_ manager: PeripheralManager) -> Void, enqueuedAt: Date? = nil) -> (() -> Void) {
         return {
             var attempt = 1
             while true {
+                var linkWasUp = self.peripheral.state == .connected
                 if BluetoothManager.connectOnDemandEnabled {
                     // "Normally disconnected" model: the pod isn't held connected, so connect on demand
                     // for this session (no forceful reconnect — that heuristic is what caused the ~28s
                     // disconnect-then-wait stalls). If already connected (burst of sessions), no-op.
                     if self.peripheral.state != .connected {
-                        do {
-                            // 45s: sized above BluetoothManager.eagerConnectBudgetSeconds (40s) so the
-                            // eager watchdog's cancel/retry cycles own the recovery underneath this
-                            // single wait, rather than this timeout firing first.
-                            try self.connectOnDemand(timeout: 45)
-                        } catch let error {
-                            self.log.error("[connectOnDemand] on-demand connect failed: %{public}@", String(describing: error))
+                        if let enqueuedAt, let failedAt = self.lastConnectFailure, failedAt > enqueuedAt {
+                            // A connect already timed out while this session was waiting its turn
+                            self.log.default("[connectOnDemand] queued behind a failed connect — not waiting on another")
+                            self.bluetoothManager?.connectionDelegate?.omnipodLogDeviceEvent("[connectOnDemand] queued behind a failed connect — failing fast")
+                        } else {
+                            do {
+                                // With the eager watchdog in play, wait above its 40s budget so its
+                                // cancel/retry cycles own the recovery underneath this single wait.
+                                let eager = self.bluetoothManager?.shouldUseEagerConnect(for: self.peripheral) ?? false
+                                let timeout = eager ? 45 : BluetoothManager.connectOnDemandTimeoutSeconds
+                                try self.connectOnDemand(timeout: timeout)
+                                self.lastConnectFailure = nil
+                                linkWasUp = true
+                            } catch let error {
+                                self.lastConnectFailure = Date()
+                                self.log.error("[connectOnDemand] on-demand connect failed: %{public}@", String(describing: error))
+                            }
                         }
                     }
                 } else if self.needsReconnection {
@@ -176,7 +190,7 @@ extension PeripheralManager {
                     }
                 }
                 // A pod that drops the link right after connecting usually accepts the next attempt
-                if BluetoothManager.connectOnDemandEnabled, self.peripheral.state != .connected, attempt == 1 {
+                if BluetoothManager.connectOnDemandEnabled, linkWasUp, self.peripheral.state != .connected, attempt == 1 {
                     attempt += 1
                     self.log.default("[connectOnDemand] link dropped after connecting — retrying")
                     self.bluetoothManager?.connectionDelegate?.omnipodLogDeviceEvent("[connectOnDemand] link dropped after connecting — retrying")
@@ -190,8 +204,8 @@ extension PeripheralManager {
         }
     }
 
-    func perform(_ block: @escaping (_ manager: PeripheralManager) -> Void) {
-        queue.async(execute: configureAndRun(block))
+    func perform(_ block: @escaping (_ manager: PeripheralManager) -> Void, enqueuedAt: Date? = nil) {
+        queue.async(execute: configureAndRun(block, enqueuedAt: enqueuedAt))
     }
 
     func assertConfiguration() {
@@ -240,6 +254,15 @@ extension PeripheralManager {
 
 // MARK: - Synchronous Commands
 extension PeripheralManager {
+    /// The state `runCommand`'s entry guard tests, for the device log: `notReady` alone cannot say
+    /// whether the central was nil or not powered on.
+    var readinessDescription: String {
+        "central=" + (central.map { String(describing: $0.state) } ?? "nil")
+            + " peripheral=\(String(describing: peripheral.state))"
+            + " queueDepth=\(sessionQueue.operationCount)"
+            + " conds=\(commandConditions.count)"
+    }
+
     /// - Throws: PeripheralManagerError
     func runCommand(timeout: TimeInterval, allowDisconnected: Bool = false, command: () -> Void) throws {
         // Prelude
@@ -369,7 +392,9 @@ extension PeripheralManager {
         } catch {
             // Unstick a connect that never completed, so didDisconnect/didFailToConnect fires
             // instead of leaving it wedged in .connecting. Queue-correct cancel via BluetoothManager.
-            bluetoothManager?.disconnectOnDemand(peripheral)
+            // During an armed takeover disconnectOnDemand refuses this cancel; the error is logged.
+            bluetoothManager?.disconnectOnDemand(peripheral, by: "connectError",
+                                                detail: "\(error) · \(readinessDescription)")
             throw error
         }
         log.default("[connectOnDemand] connected in %{public}@s", String(format: "%.3f", Date().timeIntervalSince(start)))
@@ -655,16 +680,24 @@ extension PeripheralManager {
     func runSession(withName name: String , _ block: @escaping () -> Void) {
         self.log.default("Scheduling session %{public}@", name)
 
+        let enqueuedAt = Date()
+        // Count the session from when it is queued, so that going to the background doesn't cancel
+        // the connect it is waiting on.
+        let bluetoothManager = self.bluetoothManager
+        bluetoothManager?.beginCommandSession()
         sessionQueue.addOperation({ [weak self] in
-            self?.perform { (manager) in
-                manager.bluetoothManager?.beginCommandSession()
-                defer { manager.bluetoothManager?.endCommandSession() }
+            guard let self = self else {
+                bluetoothManager?.endCommandSession()
+                return
+            }
+            self.perform(enqueuedAt: enqueuedAt) { (manager) in
+                defer { bluetoothManager?.endCommandSession() }
                 manager.log.default("======================== %{public}@ ===========================", name)
                 block()
                 manager.log.default("------------------------ %{public}@ ---------------------------", name)
-                self?.idleStart = Date()
-                self?.log.default("Start of idle at %{public}@", String(describing: self?.idleStart))
-                self?.scheduleIdleDisconnectIfNeeded()
+                manager.idleStart = Date()
+                manager.log.default("Start of idle at %{public}@", String(describing: manager.idleStart))
+                manager.scheduleIdleDisconnectIfNeeded()
             }
         })
     }
@@ -678,17 +711,7 @@ extension PeripheralManager {
     /// hold the connection separately via `shouldHoldConnection`, so this delay only bites while backgrounded.)
     private func scheduleIdleDisconnectIfNeeded() {
         guard BluetoothManager.connectOnDemandEnabled else { return }
-        // Eager-gated pods (InPlay + affected iPhone): reconnecting costs a wedge storm (median ~10s,
-        // worst ~30s+), so a working connection is precious. Use a much longer idle window so one loop
-        // cycle's status→compute→dose burst (sessions ~10-25s apart) shares a single connection instead
-        // of paying 2-3 storms per cycle. The cycle still ends disconnected — the heartbeat probe
-        // re-arms ~a minute after the last command, well before the next CGM reading.
-        let idleDelay: TimeInterval
-        if bluetoothManager?.shouldUseEagerConnect(for: peripheral) == true {
-            idleDelay = BluetoothManager.eagerIdleDisconnectSeconds
-        } else {
-            idleDelay = BluetoothManager.idleDisconnectSeconds
-        }
+        let idleDelay = BluetoothManager.idleDisconnectSeconds
         let idleAt = idleStart
         queue.asyncAfter(deadline: .now() + idleDelay) { [weak self] in
             guard let self = self, BluetoothManager.connectOnDemandEnabled else { return }
@@ -706,7 +729,7 @@ extension PeripheralManager {
             self.log.default("[connectOnDemand] idle ~%{public}ds, no queued session -> disconnecting", Int(idleDelay))
             // Queue-correct cancel: route through BluetoothManager so it runs on managerQueue. Cancelling
             // from this (PeripheralManager) queue raced CoreBluetooth's teardown and wedged the next connect.
-            self.bluetoothManager?.disconnectOnDemand(self.peripheral)
+            self.bluetoothManager?.disconnectOnDemand(self.peripheral, by: "idle")
         }
     }
 }
