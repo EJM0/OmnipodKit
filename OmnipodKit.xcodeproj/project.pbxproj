@@ -214,6 +214,7 @@
 				PumpManagerUI/Views/PodDetailsView.swift,
 				PumpManagerUI/Views/PodDiagnosticsView.swift,
 				PumpManagerUI/Views/PodKeepAliveView.swift,
+				PumpManagerUI/Views/PodSessionLogView.swift,
 				PumpManagerUI/Views/PodSetupView.swift,
 				PumpManagerUI/Views/PodTypeSelection.swift,
 				PumpManagerUI/Views/PumpManagerDetailsView.swift,
