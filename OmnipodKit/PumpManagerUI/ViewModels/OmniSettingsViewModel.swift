@@ -532,7 +532,7 @@ class OmniSettingsViewModel: ObservableObject {
     }
 
     func totalDeliveryText(for units: Double) -> String {
-        let quantity = HKQuantity(unit: .internationalUnit(), doubleValue: units)
+        let quantity = LoopQuantity(unit: .internationalUnit, doubleValue: units)
         return reservoirVolumeFormatter.string(from: quantity, includeUnit: false) ?? ""
     }
 
