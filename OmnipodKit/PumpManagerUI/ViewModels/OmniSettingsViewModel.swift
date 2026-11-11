@@ -10,7 +10,6 @@
 import SwiftUI
 import LoopKit
 import LoopKitUI
-import HealthKit
 import Combine
 
 
@@ -176,14 +175,14 @@ class OmniSettingsViewModel: ObservableObject {
         return pumpManager.isClockOffset
     }
 
-    var isPodDataStale: Bool {
-        return Date().timeIntervalSince(pumpManager.lastSync ?? .distantPast) > .minutes(12)
+    var inSignalLoss: Bool {
+        return pumpManager.inSignalLoss
     }
 
     var recoveryText: String? {
         if case .fault = podCommState {
             return LocalizedString("⚠️ Insulin delivery stopped. Change Pod now.", comment: "The action string on pod status page when pod faulted")
-        } else if podOk && isPodDataStale {
+        } else if podOk && inSignalLoss {
             return LocalizedString("Make sure your phone and pod are close to each other. If communication issues persist, move to a new area.", comment: "The action string on pod status page when pod data is stale")
         } else if let serviceTimeRemaining = pumpManager.podServiceTimeRemaining, serviceTimeRemaining <= Pod.serviceDuration - Pod.nominalPodLife {
             if let serviceTimeRemainingString = serviceTimeRemainingString {
@@ -224,7 +223,7 @@ class OmniSettingsViewModel: ObservableObject {
         switch basalDeliveryState {
         case .active(_), .initiatingTempBasal:
             return true
-        case .tempBasal(_), .cancelingTempBasal, .suspending, .suspended(_), .resuming, .none:
+        default:
             return false
         }
     }
@@ -270,7 +269,7 @@ class OmniSettingsViewModel: ObservableObject {
         return nil
     }
 
-    let reservoirVolumeFormatter = QuantityFormatter(for: .internationalUnit())
+    let reservoirVolumeFormatter = QuantityFormatter(for: .internationalUnit)
 
     var didFinish: (() -> Void)?
 
@@ -350,12 +349,9 @@ class OmniSettingsViewModel: ObservableObject {
 
     // Stop using the OmnipodKit pumpManager altogether
     func stopUsingPumpTypeTapped() {
-        // Prevent a later "Bluetooth use unsupported on this device" error
-        self.pumpManager.forgetBluetoothManager()
-        pumpManager.notifyDelegateOfDeactivation {
-            DispatchQueue.main.async {
-                self.didFinish?()
-            }
+        Task { @MainActor in
+            await pumpManager.delete()
+            self.didFinish?()
         }
     }
 
@@ -379,8 +375,8 @@ class OmniSettingsViewModel: ObservableObject {
         }
     }
 
-    func runTemporaryBasalProgram(unitsPerHour: Double, for duration: TimeInterval, completion: @escaping (PumpManagerError?) -> Void) {
-        pumpManager.enactTempBasal(unitsPerHour: unitsPerHour, for: duration, automatic: false, completion: completion)
+    func runTemporaryBasalProgram(decisionId: UUID?, unitsPerHour: Double, for duration: TimeInterval, completion: @escaping (PumpManagerError?) -> Void) {
+        pumpManager.runTemporaryBasalProgram(decisionId: decisionId, unitsPerHour: unitsPerHour, for: duration, automatic: false, completion: completion)
     }
 
     func saveScheduledExpirationReminder(_ selectedDate: Date?, _ completion: @escaping (Error?) -> Void) {
@@ -509,7 +505,7 @@ class OmniSettingsViewModel: ObservableObject {
                                 String(format: "%03u", status.faultEventCode.rawValue))
             }
         case .active:
-            if isPodDataStale {
+            if inSignalLoss {
                 return LocalizedString("Signal Loss", comment: "Error message for reservoir view during signal loss")
             } else {
                 return nil
@@ -522,13 +518,13 @@ class OmniSettingsViewModel: ObservableObject {
     func reservoirText(for level: ReservoirLevel) -> String {
         switch level {
         case .aboveThreshold:
-            let quantity = HKQuantity(unit: .internationalUnit(), doubleValue: Pod.maximumReservoirReading)
+            let quantity = LoopQuantity(unit: .internationalUnit, doubleValue: Pod.maximumReservoirReading)
             let thresholdString = reservoirVolumeFormatter.string(from: quantity, includeUnit: false) ?? ""
             let unitString = reservoirVolumeFormatter.localizedUnitStringWithPlurality(forValue: Pod.maximumReservoirReading, avoidLineBreaking: true)
             return String(format: LocalizedString("%1$@+ %2$@", comment: "Format string for reservoir level above max measurable threshold. (1: measurable reservoir threshold) (2: units)"),
                           thresholdString, unitString)
         case .valid(let value):
-            let quantity = HKQuantity(unit: .internationalUnit(), doubleValue: value)
+            let quantity = LoopQuantity(unit: .internationalUnit, doubleValue: value)
             return reservoirVolumeFormatter.string(from: quantity) ?? ""
         }
     }
