@@ -557,7 +557,7 @@ final class DeviceHandoffTests: XCTestCase {
         XCTAssertTrue(pod.runSession(&phone))
         // taken in another boot, with the clock since set back before the take
         phone.pod.supersedingTake = SupersedingTake(until: withinTheWindow.addingTimeInterval(.hours(1)),
-                                                    now: Date(timeIntervalSinceNow: .hours(1)), uptime: 0, bootSession: "another boot")
+                                                    now: Date(timeIntervalSinceNow: .hours(1)), monotonic: 0, bootSession: "another boot")
         pod.sqn += 1
         XCTAssertFalse(pod.runSession(&phone))
         XCTAssertTrue(phone.pod.refusesSessions)
@@ -608,21 +608,34 @@ final class DeviceHandoffTests: XCTestCase {
         XCTAssertFalse(pod.runSession(&watch), "and a new handshake is refused")
     }
 
-    /// Within one boot the scope runs on uptime, so a clock change can't stretch it; across a reboot it runs on
-    /// the wall clock, and a clock set back before the take ends it.
+    /// The scope's own clock is `CLOCK_MONOTONIC_RAW`, which keeps counting while the device sleeps
+    /// (`systemUptime` doesn't, and a mostly-asleep phone would stretch 6 h to days).
+    func testTheScopeRunsOnAClockThatCountsSleep() {
+        let before = Double(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)) / 1_000_000_000
+        let take = SupersedingTake(until: Date().addingTimeInterval(takeoverWindow))
+        let after = Double(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)) / 1_000_000_000
+        XCTAssertGreaterThanOrEqual(take.monotonicAtTake, before)
+        XCTAssertLessThanOrEqual(take.monotonicAtTake, after)
+        XCTAssertTrue(take.covers())
+        XCTAssertFalse(take.covers(monotonic: take.monotonicAtTake + takeoverWindow + 1),
+                       "six hours on that clock end it, whatever the wall clock says")
+    }
+
+    /// Within one boot the scope runs on that clock, so a clock change can't stretch it; across a reboot it runs
+    /// on the wall clock, and a clock set back before the take ends it.
     func testTheScopeSurvivesClockChanges() {
         let takenAt = Date()
-        let take = SupersedingTake(until: takenAt.addingTimeInterval(takeoverWindow), now: takenAt, uptime: 100, bootSession: "A")
+        let take = SupersedingTake(until: takenAt.addingTimeInterval(takeoverWindow), now: takenAt, monotonic: 100, bootSession: "A")
 
-        XCTAssertTrue(take.covers(now: takenAt.addingTimeInterval(.hours(1)), uptime: 100 + .hours(1), bootSession: "A"))
-        XCTAssertFalse(take.covers(now: takenAt.addingTimeInterval(.hours(1)), uptime: 100 + .hours(7), bootSession: "A"),
+        XCTAssertTrue(take.covers(now: takenAt.addingTimeInterval(.hours(1)), monotonic: 100 + .hours(1), bootSession: "A"))
+        XCTAssertFalse(take.covers(now: takenAt.addingTimeInterval(.hours(1)), monotonic: 100 + .hours(7), bootSession: "A"),
                        "seven hours have passed, whatever the clock says")
-        XCTAssertFalse(take.covers(now: takenAt.addingTimeInterval(.hours(1)), uptime: 50, bootSession: "A"))
+        XCTAssertFalse(take.covers(now: takenAt.addingTimeInterval(.hours(1)), monotonic: 50, bootSession: "A"))
 
-        XCTAssertTrue(take.covers(now: takenAt.addingTimeInterval(.hours(1)), uptime: 5, bootSession: "B"))
-        XCTAssertFalse(take.covers(now: takenAt.addingTimeInterval(-.hours(1)), uptime: 5, bootSession: "B"))
-        XCTAssertFalse(take.covers(now: takenAt.addingTimeInterval(.hours(7)), uptime: 5, bootSession: "B"))
-        XCTAssertTrue(take.covers(now: takenAt.addingTimeInterval(.hours(1)), uptime: 5, bootSession: nil),
+        XCTAssertTrue(take.covers(now: takenAt.addingTimeInterval(.hours(1)), monotonic: 5, bootSession: "B"))
+        XCTAssertFalse(take.covers(now: takenAt.addingTimeInterval(-.hours(1)), monotonic: 5, bootSession: "B"))
+        XCTAssertFalse(take.covers(now: takenAt.addingTimeInterval(.hours(7)), monotonic: 5, bootSession: "B"))
+        XCTAssertTrue(take.covers(now: takenAt.addingTimeInterval(.hours(1)), monotonic: 5, bootSession: nil),
                       "no boot session: the wall clock decides")
         XCTAssertNotNil(SupersedingTake(rawValue: take.rawValue))
         XCTAssertEqual(SupersedingTake(rawValue: take.rawValue), take)
@@ -773,6 +786,25 @@ final class DeviceHandoffTests: XCTestCase {
         manager.releaseControl()
         XCTAssertTrue(manager.isControlReleased)
         XCTAssertNil(manager.state.podState?.supersedingTake, "letting the pod go ends the take")
+    }
+
+    /// A plain take leaves a refused manager where it is: still refused, still released, off the radio.
+    func testAPlainTakeOfARefusedManagerStaysOffTheRadio() {
+        let manager = makeManager(refusing: true)
+        manager.releaseControl()
+        XCTAssertTrue(manager.isControlReleased)
+        manager.takeControl()
+        XCTAssertTrue(manager.isControlReleased, "no re-arm, no search")
+        XCTAssertTrue(manager.refusesSessions)
+    }
+
+    /// Lifting a refusal without superseding anyone starts no scope.
+    func testLiftingARefusalStartsNoScope() {
+        let manager = makeManager(refusing: true)
+        manager.takeControlLiftingRefusal()
+        XCTAssertFalse(manager.refusesSessions)
+        XCTAssertNil(manager.state.podState?.supersedingTake)
+        XCTAssertEqual(manager.state.podState?.expectsSessionResync, true)
     }
 
     /// A plain take by a controller that never let the pod go (a relaunch, a check) expects no resync: the

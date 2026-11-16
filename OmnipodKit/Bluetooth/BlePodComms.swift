@@ -139,6 +139,9 @@ class BlePodComms: PodComms {
             bluetoothManager.disconnectFromDevice(uuidString: manager.peripheral.identifier.uuidString)
         }
         manager = nil
+        if let podState {
+            AcceptedEapSqn.remove(for: podState)
+        }
         super.forgetPod()
     }
 
@@ -977,5 +980,9 @@ enum AcceptedEapSqn {
 
     static func save(_ sqn: Int, for pod: PodState) {
         UserDefaults.standard.set(sqn, forKey: key(pod))
+    }
+
+    static func remove(for pod: PodState) {
+        UserDefaults.standard.removeObject(forKey: key(pod))
     }
 }

@@ -181,31 +181,37 @@ extension PodState {
     }
 }
 
-/// A superseding take's scope. Within one boot it ends by elapsed uptime, which a clock change can't stretch;
-/// across a reboot it falls back to the wall clock, and a clock set back before the take ends it.
+/// A superseding take's scope. Within one boot it ends by `CLOCK_MONOTONIC_RAW`, which counts sleep and which a
+/// clock change can't stretch; across a reboot it falls back to the wall clock, and a clock set back before the
+/// take ends it.
 struct SupersedingTake: RawRepresentable, Equatable, CustomStringConvertible {
     typealias RawValue = [String: Any]
 
     let since: Date
     let until: Date
-    let uptimeAtTake: TimeInterval
+    let monotonicAtTake: TimeInterval
     let bootSession: String?
 
-    init(until: Date, now: Date = Date(), uptime: TimeInterval = ProcessInfo.processInfo.systemUptime,
+    init(until: Date, now: Date = Date(), monotonic: TimeInterval = SupersedingTake.monotonicNow(),
          bootSession: String? = SupersedingTake.currentBootSession) {
         self.since = now
         self.until = until
-        self.uptimeAtTake = uptime
+        self.monotonicAtTake = monotonic
         self.bootSession = bootSession
     }
 
-    func covers(now: Date = Date(), uptime: TimeInterval = ProcessInfo.processInfo.systemUptime,
+    func covers(now: Date = Date(), monotonic: TimeInterval = SupersedingTake.monotonicNow(),
                 bootSession: String? = SupersedingTake.currentBootSession) -> Bool {
         if let bootSession, bootSession == self.bootSession {
-            let elapsed = uptime - uptimeAtTake
+            let elapsed = monotonic - monotonicAtTake
             return elapsed >= 0 && elapsed < until.timeIntervalSince(since)
         }
         return since <= now && now < until
+    }
+
+    /// Seconds since boot, asleep or awake (`systemUptime` stops while the device sleeps).
+    static func monotonicNow() -> TimeInterval {
+        Double(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)) / 1_000_000_000
     }
 
     static var currentBootSession: String? {
@@ -218,15 +224,15 @@ struct SupersedingTake: RawRepresentable, Equatable, CustomStringConvertible {
 
     init?(rawValue: RawValue) {
         guard let since = rawValue["since"] as? Date, let until = rawValue["until"] as? Date,
-              let uptimeAtTake = rawValue["uptimeAtTake"] as? TimeInterval else { return nil }
+              let monotonicAtTake = rawValue["monotonicAtTake"] as? TimeInterval else { return nil }
         self.since = since
         self.until = until
-        self.uptimeAtTake = uptimeAtTake
+        self.monotonicAtTake = monotonicAtTake
         self.bootSession = rawValue["bootSession"] as? String
     }
 
     var rawValue: RawValue {
-        var raw: RawValue = ["since": since, "until": until, "uptimeAtTake": uptimeAtTake]
+        var raw: RawValue = ["since": since, "until": until, "monotonicAtTake": monotonicAtTake]
         raw["bootSession"] = bootSession
         return raw
     }
@@ -251,16 +257,16 @@ extension PodComms {
         podStateLock.unlock()
     }
 
-    /// A take: the next resync shows the other controller's sessions before it. Only a superseding take
-    /// (`until` set) also lifts a refusal and starts a scope; a plain one leaves both as they are. Waits out a
-    /// session in progress.
+    /// A take: the next resync shows the other controller's sessions before it. Only a dated take (`until` set)
+    /// also lifts a refusal, and starts a scope if `until` is still ahead; a plain one leaves both as they are.
+    /// Waits out a session in progress.
     func expectSessionResync(supersedingAnotherControllerUntil until: Date?) {
         podStateLock.lock()
         podState?.expectsSessionResync = true
         if let until {
             podState?.foreignSessionDetectedAt = nil
             podState?.refusesSessions = false
-            podState?.supersedingTake = SupersedingTake(until: until)
+            podState?.supersedingTake = until > Date() ? SupersedingTake(until: until) : nil
         }
         podStateLock.unlock()
     }
@@ -315,11 +321,17 @@ extension OmniPumpManager: ExclusiveDeviceControl {
 
     /// With a date, the host has taken the pod, at the user's request, from a controller that may not know yet:
     /// until then (`SupersedingTake`), `stopSupersedingAnotherController()` or a release, that controller's
-    /// sessions are reported (`foreignSessionDetectedAt`) but don't stop this one. Only this form lifts a
-    /// refusal (`refusesSessions`). Without a date, a refusal and a scope stay as they are, and the next resync
-    /// is expected only if this controller had released the pod. Call it off the main thread: it waits out a
-    /// session in progress.
+    /// sessions are reported (`foreignSessionDetectedAt`) but don't stop this one. Only one side of a pairing
+    /// may ever take with a date (in Trio, the phone): two scopes in opposite directions would let both command.
+    /// A dated take lifts a refusal (`refusesSessions`); so does `takeControlLiftingRefusal()`, without a scope.
+    /// Without a date, a refusal and a scope stay as they are, a refused manager stays off the radio, and the
+    /// next resync is expected only if this controller had released the pod. Call it off the main thread: it
+    /// waits out a session in progress.
     public func takeControl(supersedingAnotherControllerUntil until: Date?) {
+        if until == nil, state.podState?.refusesSessions == true {
+            omnipodLogDeviceEvent("[trust] plain take of a refused pod: stays refused and off the radio")
+            return
+        }
         if until != nil, let pod = state.podState, pod.refusesSessions || pod.supersedingTake != nil {
             omnipodLogDeviceEvent("[trust] superseding take: \(pod.refusesSessions ? "refusal lifted" : "scope replaced")")
         }
@@ -370,6 +382,13 @@ extension OmniPumpManager: ExclusiveDeviceControl {
     /// nothing and lets go of its link, until the host takes control with a date.
     public var refusesSessions: Bool {
         state.podState?.refusesSessions ?? false
+    }
+
+    /// Lifts a refusal without superseding anyone, at the user's request, when the other controller is known to
+    /// have stopped, and takes control. A later foreign session stops this controller again. Call it off the
+    /// main thread: it waits out a session in progress.
+    public func takeControlLiftingRefusal() {
+        takeControl(supersedingAnotherControllerUntil: .distantPast)
     }
 
     /// The superseded controller has acknowledged that it stopped. Call it off the main thread: it waits out
