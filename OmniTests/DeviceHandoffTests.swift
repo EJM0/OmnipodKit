@@ -725,6 +725,45 @@ final class DeviceHandoffTests: XCTestCase {
         XCTAssertNil(phone.pod.foreignSessionDetectedAt, "the phone alone commands")
     }
 
+    /// The watch's first attempt never reaches the pod, the phone's Take Back lands, and the watch tries again.
+    /// Its retry still sends the SQN right after the release, so the phone's session shows as foreign.
+    func testAnAdoptWithALostAttemptStillRefusesASessionAfterTheRelease() throws {
+        let pod = PodDouble(sqn: 41)
+        var (phone, configuration) = releasedExport(pod)
+        var watch = Controller(pod: try XCTUnwrap(try adopt(configuration).podState))
+        _ = watch.pod.nextHandshakeSqn() // an attempt that never reached the pod
+        phone = try take(phone, supersedingUntil: withinTheWindow)
+        XCTAssertTrue(pod.runSession(&phone))
+
+        XCTAssertFalse(pod.runSession(&watch), "the adopt doesn't absorb the phone's Take Back")
+        XCTAssertTrue(watch.pod.refusesSessions)
+        XCTAssertTrue(pod.runSession(&phone))
+        XCTAssertNil(phone.pod.foreignSessionDetectedAt)
+    }
+
+    /// The adopter's first session was accepted, but the process ended before the host saved the state: the
+    /// relaunch still has the bound, and its own accepted counter tells it the resync is its own.
+    func testABoundedAdoptRelaunchedAfterItsFirstSessionRunsAgain() throws {
+        let pod = PodDouble(sqn: 41)
+        let (_, configuration) = releasedExport(pod)
+        let savedByTheHost = try XCTUnwrap(try adopt(configuration).podState)
+        var watch = Controller(pod: savedByTheHost)
+        XCTAssertTrue(pod.runSession(&watch))
+
+        var relaunched = Controller(pod: savedByTheHost, lastAccepted: watch.lastAccepted)
+        XCTAssertTrue(pod.runSession(&relaunched))
+        XCTAssertFalse(relaunched.pod.refusesSessions)
+    }
+
+    /// The takes that expect a resync (a dated take, lifting a refusal, a plain take after this controller's
+    /// own release) clear an adopt's bound: the next resync is theirs.
+    func testATakeClearsAnAdoptsBound() throws {
+        var adopted = try XCTUnwrap(try adopt(releasedExport(PodDouble(sqn: 41)).configuration).podState)
+        XCTAssertEqual(adopted.releasedEapSqn, 41)
+        adopted = try take(adopted, supersedingUntil: nil)
+        XCTAssertNil(adopted.releasedEapSqn)
+    }
+
     func testAnAdoptWithNothingAfterTheReleaseRuns() throws {
         let pod = PodDouble(sqn: 41)
         let (_, configuration) = releasedExport(pod)

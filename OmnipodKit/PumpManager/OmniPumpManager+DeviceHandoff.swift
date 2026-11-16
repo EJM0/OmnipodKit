@@ -23,9 +23,13 @@ import os.log
 extension OmniPumpManager: DeviceConfigurationSharing {
 
     /// Marks the pod shared: another controller may run it from this copy.
+    /// Export after `releaseControl()` has succeeded (`isControlReleased`): only then does the export bound the
+    /// adopt to the release. Waits out a session in progress, so the bound includes its handshake.
     public func exportConfiguration() -> SharedDeviceConfiguration {
         if state.podState?.sharedWithAnotherController == false {
             podComms.markSharedWithAnotherController()
+        } else {
+            podComms.waitOutSession()
         }
         return state.sharedConfiguration(managerIdentifier: pluginIdentifier)
     }
@@ -163,8 +167,15 @@ extension PodState {
     // MARK: Handshakes (BlePodComms.establishNewSession)
 
     /// The EAP SQN for this controller's next handshake; nil while it refuses sessions.
+    /// While an adopt is bounded, every attempt sends the SQN right after the release: an attempt that never
+    /// reached the pod must not carry the counter past a session made since.
     mutating func nextHandshakeSqn() -> Int? {
-        refusesSessions ? nil : incrementEapSeq()
+        guard !refusesSessions else { return nil }
+        if let releasedEapSqn {
+            bleMessageTransportState.eapSeq = releasedEapSqn + 1
+            return releasedEapSqn + 1
+        }
+        return incrementEapSeq()
     }
 
     /// The pod answered a handshake with its own counter. At or below the last handshake the pod accepted
@@ -173,6 +184,7 @@ extension PodState {
     mutating func handshakeResynced(to podSqn: Int, lastAcceptedHere: Int?) -> Bool {
         bleMessageTransportState.eapSeq = podSqn
         if let lastAcceptedHere, podSqn <= lastAcceptedHere {
+            releasedEapSqn = nil
             return false
         }
         if let releasedEapSqn, podSqn > releasedEapSqn {
@@ -261,6 +273,12 @@ extension PodComms {
     func markSharedWithAnotherController() {
         podStateLock.lock()
         podState?.sharedWithAnotherController = true
+        podStateLock.unlock()
+    }
+
+    /// Returns once a session in progress has ended.
+    func waitOutSession() {
+        podStateLock.lock()
         podStateLock.unlock()
     }
 
