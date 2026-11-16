@@ -693,6 +693,67 @@ final class DeviceHandoffTests: XCTestCase {
         XCTAssertFalse(adopted.refusesSessions)
     }
 
+    // MARK: - Bounded adopt
+
+    /// The phone releases the pod, then exports it, as Trio lends it.
+    func releasedExport(_ pod: PodDouble) -> (phone: Controller, configuration: SharedDeviceConfiguration) {
+        var phonePod = makePodState()
+        phonePod.unacknowledgedCommand = nil
+        phonePod.sharedWithAnotherController = true
+        phonePod.bleMessageTransportState.eapSeq = pod.sqn
+        return (Controller(pod: phonePod), export(makeState(released: true, pod: phonePod)))
+    }
+
+    /// The phone's superseding Take Back lands between the export and the watch adopt's first handshake. The
+    /// adopt may only meet the sessions up to the release; the phone's new one is another controller's.
+    func testAnAdoptRefusesASessionMadeAfterTheRelease() throws {
+        let pod = PodDouble(sqn: 41)
+        var (phone, configuration) = releasedExport(pod)
+
+        phone = try take(phone, supersedingUntil: withinTheWindow)
+        XCTAssertTrue(pod.runSession(&phone))
+
+        var watch = Controller(pod: try XCTUnwrap(try adopt(configuration).podState))
+        XCTAssertEqual(watch.pod.releasedEapSqn, 41)
+        let before = pod.sqn
+        XCTAssertFalse(pod.runSession(&watch), "the adopt doesn't absorb the phone's new session")
+        XCTAssertTrue(watch.pod.refusesSessions)
+        XCTAssertNotNil(watch.pod.foreignSessionDetectedAt)
+        XCTAssertEqual(pod.sqn, before)
+
+        XCTAssertTrue(pod.runSession(&phone))
+        XCTAssertNil(phone.pod.foreignSessionDetectedAt, "the phone alone commands")
+    }
+
+    func testAnAdoptWithNothingAfterTheReleaseRuns() throws {
+        let pod = PodDouble(sqn: 41)
+        let (_, configuration) = releasedExport(pod)
+
+        var watch = Controller(pod: try XCTUnwrap(try adopt(configuration).podState))
+        XCTAssertTrue(pod.runSession(&watch))
+        XCTAssertNil(watch.pod.foreignSessionDetectedAt)
+        XCTAssertNil(watch.pod.releasedEapSqn, "spent with the first session")
+
+        let relaunched = try XCTUnwrap(PodState(rawValue: try XCTUnwrap(try adopt(configuration).podState).rawValue))
+        XCTAssertEqual(relaunched.releasedEapSqn, 41, "an adopt relaunched before its first session keeps the bound")
+    }
+
+    /// An export made before a release (#177's offline start) carries no bound: the adopt expects the resync.
+    func testAnExportWithoutAReleaseCarriesNoBound() throws {
+        let pod = PodDouble(sqn: 41)
+        var phonePod = makePodState()
+        phonePod.unacknowledgedCommand = nil
+        phonePod.sharedWithAnotherController = true
+        let configuration = export(makeState(released: false, pod: phonePod))
+        var phone = Controller(pod: phonePod)
+        XCTAssertTrue(pod.runSession(&phone))
+
+        var watch = Controller(pod: try XCTUnwrap(try adopt(configuration).podState))
+        XCTAssertNil(watch.pod.releasedEapSqn)
+        XCTAssertTrue(pod.runSession(&watch))
+        XCTAssertNil(watch.pod.foreignSessionDetectedAt)
+    }
+
     // MARK: - The manager's refusal
 
     /// No RileyLink: a session that gets past `OmniPumpManager.runSession` fails for that instead.
@@ -786,6 +847,19 @@ final class DeviceHandoffTests: XCTestCase {
         manager.releaseControl()
         XCTAssertTrue(manager.isControlReleased)
         XCTAssertNil(manager.state.podState?.supersedingTake, "letting the pod go ends the take")
+    }
+
+    /// The manager's own export after a release carries the bound; one before a release doesn't.
+    func testAReleasedManagersExportBoundsTheAdopt() throws {
+        let manager = makeManager(refusing: false)
+        let unbounded = try XCTUnwrap(OmniPumpManager.adoptedRawState(from: manager.exportConfiguration(), localState: nil))
+        XCTAssertNil(OmniPumpManagerState(rawValue: unbounded)?.podState?.releasedEapSqn)
+
+        manager.releaseControl()
+        let sqn = try XCTUnwrap(manager.state.podState?.bleMessageTransportState.eapSeq)
+        let bounded = try XCTUnwrap(OmniPumpManager.adoptedRawState(from: manager.exportConfiguration(), localState: nil))
+        XCTAssertEqual(OmniPumpManagerState(rawValue: bounded)?.podState?.releasedEapSqn, sqn)
+        XCTAssertNil(manager.state.podState?.releasedEapSqn, "the exporter's own state carries none")
     }
 
     /// A plain take leaves a refused manager where it is: still refused, still released, off the radio.

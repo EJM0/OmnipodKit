@@ -152,6 +152,10 @@ public struct PodState: RawRepresentable, Equatable, CustomDebugStringConvertibl
     /// other controller's sessions from before. Cleared once a session is established.
     var expectsSessionResync: Bool = false
 
+    /// Adopted from an export made after the exporter released the pod at this EAP SQN: a resync beyond it is
+    /// a session since the release, another controller's. Cleared once a session is established.
+    var releasedEapSqn: Int?
+
     /// The last resync after this controller adopted or took the pod: another controller is using it.
     var foreignSessionDetectedAt: Date?
 
@@ -682,6 +686,7 @@ public struct PodState: RawRepresentable, Equatable, CustomDebugStringConvertibl
         self.untrackedDeliveryIsForeign = rawValue["untrackedDeliveryIsForeign"] as? Bool ?? false
         self.sharedWithAnotherController = rawValue["sharedWithAnotherController"] as? Bool ?? false
         self.expectsSessionResync = rawValue["expectsSessionResync"] as? Bool ?? false
+        self.releasedEapSqn = rawValue["releasedEapSqn"] as? Int
         self.foreignSessionDetectedAt = rawValue["foreignSessionDetectedAt"] as? Date
         self.supersedingTake = (rawValue["supersedingTake"] as? SupersedingTake.RawValue).flatMap(SupersedingTake.init(rawValue:))
         self.refusesSessions = rawValue["refusesSessions"] as? Bool ?? false
@@ -797,6 +802,7 @@ public struct PodState: RawRepresentable, Equatable, CustomDebugStringConvertibl
             rawValue["expectsSessionResync"] = true
         }
         rawValue["foreignSessionDetectedAt"] = foreignSessionDetectedAt
+        rawValue["releasedEapSqn"] = releasedEapSqn
         rawValue["supersedingTake"] = supersedingTake?.rawValue
         if refusesSessions {
             rawValue["refusesSessions"] = true
@@ -864,6 +870,7 @@ public struct PodState: RawRepresentable, Equatable, CustomDebugStringConvertibl
             "* sharedWithAnotherController: \(sharedWithAnotherController)",
             "* foreignSessionDetectedAt: \(optionalString(foreignSessionDetectedAt))",
             "* refusesSessions: \(refusesSessions)",
+            "* releasedEapSqn: \(optionalString(releasedEapSqn))",
             "* supersedingTake: \(optionalString(supersedingTake))",
             "* pdmRef: \(optionalString(fault?.pdmRef))",
             "* fault: \(optionalString(fault))",

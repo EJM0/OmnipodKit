@@ -68,7 +68,10 @@ extension OmniPumpManagerState {
         shared.configuredByAnotherController = false
         shared.inFlightDosesInheritedAway = false
         shared.rileyLinkConnectionManagerState = nil
-        shared.updatePodStateFromPodComms(podState?.sharedFacts)
+        var pod = podState?.sharedFacts
+        // exported after the release: the adopter accepts no session after it
+        pod?.releasedEapSqn = podConnectionReleased ? podState?.bleMessageTransportState.eapSeq : nil
+        shared.updatePodStateFromPodComms(pod)
         let measured = shared.podState?.lastInsulinMeasurements
         return SharedDeviceConfiguration(managerIdentifier: managerIdentifier,
                                          asOf: measured?.validTime ?? Date(),
@@ -172,12 +175,16 @@ extension PodState {
         if let lastAcceptedHere, podSqn <= lastAcceptedHere {
             return false
         }
+        if let releasedEapSqn, podSqn > releasedEapSqn {
+            expectsSessionResync = false
+        }
         return resolveAfterSessionResync()
     }
 
     /// A handshake established a session.
     mutating func sessionEstablished() {
         expectsSessionResync = false
+        releasedEapSqn = nil
     }
 }
 
@@ -263,6 +270,7 @@ extension PodComms {
     func expectSessionResync(supersedingAnotherControllerUntil until: Date?) {
         podStateLock.lock()
         podState?.expectsSessionResync = true
+        podState?.releasedEapSqn = nil
         if let until {
             podState?.foreignSessionDetectedAt = nil
             podState?.refusesSessions = false
