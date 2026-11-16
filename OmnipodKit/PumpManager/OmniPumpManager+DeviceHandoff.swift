@@ -116,7 +116,8 @@ extension PodState {
         pod.untrackedDeliveryIsForeign = false
         pod.expectsSessionResync = false
         pod.foreignSessionDetectedAt = nil
-        pod.supersededAnotherController = false
+        pod.supersedesAnotherControllerUntil = nil
+        pod.refusesSessions = false
         pod.bleMessageTransportState = BleMessageTransportState(ck: nil, noncePrefix: nil,
                                                                 eapSeq: bleMessageTransportState.eapSeq,
                                                                 messageNumber: bleMessageTransportState.messageNumber)
@@ -147,7 +148,11 @@ extension PodState {
         guard sharedWithAnotherController else { return false }
         resolveAfterForeignControl(dropInFlight: false)
         if !expectsSessionResync {
-            foreignSessionDetectedAt = Date()
+            let now = Date()
+            foreignSessionDetectedAt = now
+            if !(supersedesAnotherControllerUntil.map { now < $0 } ?? false) {
+                refusesSessions = true
+            }
         }
         return true
     }
@@ -172,11 +177,19 @@ extension PodComms {
 
     /// A take: the next resync shows the other controller's sessions before it, and a foreign session
     /// found earlier no longer stops this controller. Waits out a session in progress.
-    func expectSessionResync(supersedingAnotherController: Bool) {
+    func expectSessionResync(supersedingAnotherControllerUntil until: Date?) {
         podStateLock.lock()
         podState?.expectsSessionResync = true
         podState?.foreignSessionDetectedAt = nil
-        podState?.supersededAnotherController = supersedingAnotherController
+        podState?.refusesSessions = false
+        podState?.supersedesAnotherControllerUntil = until
+        podStateLock.unlock()
+    }
+
+    /// The superseded controller has stopped: from now on a foreign session stops this one too.
+    func stopSupersedingAnotherController() {
+        podStateLock.lock()
+        podState?.supersedesAnotherControllerUntil = nil
         podStateLock.unlock()
     }
 }
@@ -215,15 +228,16 @@ extension OmniPumpManager: ExclusiveDeviceControl {
     /// without this one releasing it (a watch's offline start), and the take's settle waits for this
     /// link.
     public func takeControl() {
-        takeControl(supersedingAnotherController: false)
+        takeControl(supersedingAnotherControllerUntil: nil)
     }
 
-    /// Taking control again is also how the host lifts a refusal after a foreign session. With
-    /// `supersedingAnotherController`, the host has taken the pod from a controller that may not know
-    /// yet: that controller's later sessions are reported (`foreignSessionDetectedAt`) but don't stop
-    /// this one. Without it, this controller expects to be the only one, and a foreign session stops it.
-    public func takeControl(supersedingAnotherController: Bool) {
-        podComms.expectSessionResync(supersedingAnotherController: supersedingAnotherController)
+    /// Taking control again is also how the host lifts a refusal after a foreign session. With a date,
+    /// the host has taken the pod from a controller that may not know yet: until then, or until
+    /// `stopSupersedingAnotherController()`, that controller's sessions are reported
+    /// (`foreignSessionDetectedAt`) but don't stop this one. Without one, or after it, a foreign session
+    /// stops this controller.
+    public func takeControl(supersedingAnotherControllerUntil until: Date?) {
+        podComms.expectSessionResync(supersedingAnotherControllerUntil: until)
         if state.podConnectionReleased {
             resumeControl()
         }
@@ -258,11 +272,21 @@ extension OmniPumpManager: ExclusiveDeviceControl {
         }
     }
 
-    /// When another controller was last found using the pod after this one adopted or took it; the host
-    /// is told through the state update. Unless this controller superseded it (`takeControl(supersedingAnotherController:)`),
-    /// it then runs no session and sends the pod nothing.
+    /// When another controller was last found using the pod after this one adopted or took it. Each one
+    /// updates the state, so the host is told every time.
     public var foreignSessionDetectedAt: Date? {
         state.podState?.foreignSessionDetectedAt
+    }
+
+    /// After a foreign session outside a superseding take, this manager runs no session and sends the pod
+    /// nothing until the host takes control again.
+    public var refusesSessions: Bool {
+        state.podState?.refusesSessions ?? false
+    }
+
+    /// The superseded controller has acknowledged that it stopped.
+    public func stopSupersedingAnotherController() {
+        podComms.stopSupersedingAnotherController()
     }
 
     public var isControlReady: Bool {

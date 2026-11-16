@@ -155,15 +155,12 @@ public struct PodState: RawRepresentable, Equatable, CustomDebugStringConvertibl
     /// The last resync after this controller adopted or took the pod: another controller is using it.
     var foreignSessionDetectedAt: Date?
 
-    /// The host took the pod from a controller it knows it superseded, so that controller's later
+    /// Until then, the host has taken the pod from a controller that may not know yet: that controller's
     /// sessions are reported but don't stop this one.
-    var supersededAnotherController: Bool = false
+    var supersedesAnotherControllerUntil: Date?
 
-    /// Another controller is using the pod and this one never claimed it over that controller: no
-    /// session runs until the host takes control again.
-    var refusesSessions: Bool {
-        foreignSessionDetectedAt != nil && !supersededAnotherController
-    }
+    /// A foreign session outside a superseding take: no session runs until the host takes control again.
+    var refusesSessions: Bool = false
 
 
     init(
@@ -686,7 +683,8 @@ public struct PodState: RawRepresentable, Equatable, CustomDebugStringConvertibl
         self.sharedWithAnotherController = rawValue["sharedWithAnotherController"] as? Bool ?? false
         self.expectsSessionResync = rawValue["expectsSessionResync"] as? Bool ?? false
         self.foreignSessionDetectedAt = rawValue["foreignSessionDetectedAt"] as? Date
-        self.supersededAnotherController = rawValue["supersededAnotherController"] as? Bool ?? false
+        self.supersedesAnotherControllerUntil = rawValue["supersedesAnotherControllerUntil"] as? Date
+        self.refusesSessions = rawValue["refusesSessions"] as? Bool ?? false
 
         if let podTypeRaw = rawValue["podType"] as? UInt8 {
             self.podType = PodType(rawValue: podTypeRaw)
@@ -799,8 +797,9 @@ public struct PodState: RawRepresentable, Equatable, CustomDebugStringConvertibl
             rawValue["expectsSessionResync"] = true
         }
         rawValue["foreignSessionDetectedAt"] = foreignSessionDetectedAt
-        if supersededAnotherController {
-            rawValue["supersededAnotherController"] = true
+        rawValue["supersedesAnotherControllerUntil"] = supersedesAnotherControllerUntil
+        if refusesSessions {
+            rawValue["refusesSessions"] = true
         }
 
         if configuredAlerts.count > 0 {

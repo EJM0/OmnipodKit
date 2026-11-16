@@ -400,8 +400,10 @@ final class DeviceHandoffTests: XCTestCase {
     /// The pod's EAP counter, as the pod keeps it: a handshake has to be above it, or the pod answers with a
     /// resync to its own value and the handshake changes nothing. `runSession` follows
     /// `BlePodComms.establishNewSession` and the session refusals; true when the session ran.
+    /// The pod also keeps the keys of its latest session: a message under any other keys can't be decrypted.
     final class PodCounter {
         var sqn: Int
+        var sessionKey = Data()
         init(sqn: Int) { self.sqn = sqn }
 
         func runSession(_ pod: inout PodState) -> Bool {
@@ -410,6 +412,8 @@ final class DeviceHandoffTests: XCTestCase {
                 let sent = pod.incrementEapSeq()
                 if sent > sqn {
                     sqn = sent
+                    sessionKey = Data(repeating: UInt8(truncatingIfNeeded: sent), count: 16)
+                    pod.bleMessageTransportState.ck = sessionKey
                     pod.expectsSessionResync = false
                     return true
                 }
@@ -419,12 +423,19 @@ final class DeviceHandoffTests: XCTestCase {
             }
             return false
         }
+
+        /// A message on a link that stayed up, under the keys `pod` already has: no handshake.
+        func acceptsWithoutHandshake(_ pod: PodState) -> Bool {
+            pod.bleMessageTransportState.ck == sessionKey
+        }
     }
 
-    /// Taking control, as `OmniPumpManager.takeControl(supersedingAnotherController:)` does it to the pod.
-    func take(_ pod: PodState, superseding: Bool) throws -> PodState {
+    let takeoverWindow: TimeInterval = .hours(6)
+
+    /// Taking control, as `OmniPumpManager.takeControl(supersedingAnotherControllerUntil:)` does it to the pod.
+    func take(_ pod: PodState, supersedingUntil until: Date?) throws -> PodState {
         let comms = PodComms(podState: pod, podType: dashType)
-        comms.expectSessionResync(supersedingAnotherController: superseding)
+        comms.expectSessionResync(supersedingAnotherControllerUntil: until)
         return try XCTUnwrap(comms.podState)
     }
 
@@ -447,7 +458,7 @@ final class DeviceHandoffTests: XCTestCase {
         let counter = PodCounter(sqn: 41)
         var (phone, watch) = try lend(counter: counter)
 
-        phone = try take(phone, superseding: false) // the watch released it
+        phone = try take(phone, supersedingUntil: nil) // the watch released it
         XCTAssertTrue(counter.runSession(&phone), "the resync shows the watch's sessions before the take")
         XCTAssertTrue(counter.runSession(&phone))
         XCTAssertNil(phone.foreignSessionDetectedAt)
@@ -458,11 +469,11 @@ final class DeviceHandoffTests: XCTestCase {
     func testAControllerThatLostThePodRunsNoSessionAndSaysSo() throws {
         let counter = PodCounter(sqn: 41)
         var (phone, watch) = try lend(counter: counter)
-        phone = try take(phone, superseding: true)
+        phone = try take(phone, supersedingUntil: Date().addingTimeInterval(takeoverWindow))
         XCTAssertTrue(counter.runSession(&phone))
 
         let before = counter.sqn
-        XCTAssertFalse(counter.runSession(&watch), "no command of any kind, insulin-adding or not")
+        XCTAssertFalse(counter.runSession(&watch), "no session, so no command of any kind: not even a status read")
         XCTAssertNotNil(watch.foreignSessionDetectedAt, "the host can see it")
         XCTAssertEqual(counter.sqn, before, "no second handshake: the phone's counter still leads")
         XCTAssertFalse(counter.runSession(&watch), "still refused, without touching the pod")
@@ -476,7 +487,7 @@ final class DeviceHandoffTests: XCTestCase {
     func testTheStaleControllerHandshakingFirstAfterATakeIsRefusedFromItsNextSession() throws {
         let counter = PodCounter(sqn: 41)
         var (phone, watch) = try lend(counter: counter)
-        phone = try take(phone, superseding: true)
+        phone = try take(phone, supersedingUntil: Date().addingTimeInterval(takeoverWindow))
 
         XCTAssertTrue(counter.runSession(&watch), "a limit: nothing on the pod shows the take yet")
         XCTAssertTrue(counter.runSession(&phone), "the take expects the resync the watch's session causes")
@@ -493,21 +504,62 @@ final class DeviceHandoffTests: XCTestCase {
     func testAControllerThatSupersededAPeerReportsItsSessionAndKeepsCommanding() throws {
         let counter = PodCounter(sqn: 41)
         var (phone, _) = try lend(counter: counter)
-        phone = try take(phone, superseding: true)
+        phone = try take(phone, supersedingUntil: Date().addingTimeInterval(takeoverWindow))
         XCTAssertTrue(counter.runSession(&phone))
         XCTAssertNil(phone.foreignSessionDetectedAt)
 
         counter.sqn += 1 // a session by the superseded peer
         XCTAssertTrue(counter.runSession(&phone), "not locked out")
-        XCTAssertNotNil(phone.foreignSessionDetectedAt, "but the host can see it")
+        let first = try XCTUnwrap(phone.foreignSessionDetectedAt, "but the host can see it")
+
+        counter.sqn += 1
         XCTAssertTrue(counter.runSession(&phone))
+        XCTAssertGreaterThan(try XCTUnwrap(phone.foreignSessionDetectedAt), first, "every one is reported")
+        XCTAssertFalse(phone.refusesSessions)
+    }
+
+    /// The superseding take is scoped: after its window, or once the peer has stopped, a foreign session stops
+    /// the phone too.
+    func testASupersedingTakeStopsAtAForeignSessionOutsideItsScope() throws {
+        let counter = PodCounter(sqn: 41)
+        var (phone, _) = try lend(counter: counter)
+        phone = try take(phone, supersedingUntil: Date(timeIntervalSinceNow: -1)) // the window has passed
+        XCTAssertTrue(counter.runSession(&phone))
+        counter.sqn += 1
+        XCTAssertFalse(counter.runSession(&phone))
+        XCTAssertTrue(phone.refusesSessions)
+        XCTAssertNotNil(phone.foreignSessionDetectedAt)
+
+        phone = try take(phone, supersedingUntil: Date().addingTimeInterval(takeoverWindow))
+        XCTAssertTrue(counter.runSession(&phone))
+        let comms = PodComms(podState: phone, podType: dashType)
+        comms.stopSupersedingAnotherController() // the peer acknowledged that it stopped
+        phone = try XCTUnwrap(comms.podState)
+        counter.sqn += 1
+        XCTAssertFalse(counter.runSession(&phone))
+        XCTAssertTrue(phone.refusesSessions)
+    }
+
+    /// A stale controller whose link stayed up never handshakes, so it never sees the resync. Its saved keys
+    /// are the pod's old session's, and a message under them can't be decrypted (the pod-side half is this
+    /// double's model, not a pod trace). On a shared pod a restored link handshakes again anyway
+    /// (`BlePodComms.omnipodPeripheralWasRestored`), which the session refusal then stops.
+    func testKeysFromBeforeATakeoverOpenNothing() throws {
+        let counter = PodCounter(sqn: 41)
+        var (phone, watch) = try lend(counter: counter)
+        XCTAssertTrue(counter.acceptsWithoutHandshake(watch), "the watch's own session is the pod's latest")
+
+        phone = try take(phone, supersedingUntil: Date().addingTimeInterval(takeoverWindow))
+        XCTAssertTrue(counter.runSession(&phone))
+        XCTAssertFalse(counter.acceptsWithoutHandshake(watch), "the phone's handshake replaced the keys")
+        XCTAssertFalse(counter.runSession(&watch), "and a new handshake is refused")
     }
 
     /// The same session, seen by a controller that believed it held the pod alone (an ordinary hand-back).
     func testAControllerThatHeldThePodAloneStopsAtAForeignSession() throws {
         let counter = PodCounter(sqn: 41)
         var (phone, _) = try lend(counter: counter)
-        phone = try take(phone, superseding: false)
+        phone = try take(phone, supersedingUntil: nil)
         XCTAssertTrue(counter.runSession(&phone))
 
         counter.sqn += 1
@@ -527,27 +579,32 @@ final class DeviceHandoffTests: XCTestCase {
 
         XCTAssertTrue(relaunched.refusesSessions)
 
-        let taken = try take(relaunched, superseding: true)
+        let until = Date().addingTimeInterval(takeoverWindow)
+        let taken = try take(relaunched, supersedingUntil: until)
         XCTAssertNil(taken.foreignSessionDetectedAt, "taking control is the host's claim")
+        XCTAssertFalse(taken.refusesSessions)
         let relaunchedAfterTake = try XCTUnwrap(PodState(rawValue: taken.rawValue))
         XCTAssertTrue(relaunchedAfterTake.expectsSessionResync)
-        XCTAssertTrue(relaunchedAfterTake.supersededAnotherController)
+        XCTAssertEqual(relaunchedAfterTake.supersedesAnotherControllerUntil, until)
     }
 
     func testAnExportCarriesNoForeignSessionAndTheAdopterExpectsAResync() throws {
         var pod = makePodState()
         pod.foreignSessionDetectedAt = Date()
         pod.expectsSessionResync = true
-        pod.supersededAnotherController = true
+        pod.supersedesAnotherControllerUntil = Date().addingTimeInterval(takeoverWindow)
+        pod.refusesSessions = true
         let configuration = export(makeState(pod: pod))
         XCTAssertNil(exportedPod(configuration)?["foreignSessionDetectedAt"])
         XCTAssertNil(exportedPod(configuration)?["expectsSessionResync"])
-        XCTAssertNil(exportedPod(configuration)?["supersededAnotherController"])
+        XCTAssertNil(exportedPod(configuration)?["supersedesAnotherControllerUntil"])
+        XCTAssertNil(exportedPod(configuration)?["refusesSessions"])
 
         let adopted = try XCTUnwrap(try adopt(configuration).podState)
         XCTAssertTrue(adopted.expectsSessionResync)
         XCTAssertNil(adopted.foreignSessionDetectedAt)
-        XCTAssertFalse(adopted.supersededAnotherController, "an adopter holds the pod alone")
+        XCTAssertNil(adopted.supersedesAnotherControllerUntil, "an adopter holds the pod alone")
+        XCTAssertFalse(adopted.refusesSessions)
     }
 
     // MARK: -

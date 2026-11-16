@@ -856,6 +856,10 @@ extension BlePodComms: OmniConnectionDelegate {
     func omnipodPeripheralWasRestored(manager: PeripheralManager) {
         if let podState = podState, manager.peripheral.identifier.uuidString == podState.bleIdentifier {
             log.bleDebug("omnipodPeripheralWasRestored for %@", manager.peripheral.identifier.uuidString)
+            // the saved session keys may predate another controller's sessions: a shared pod handshakes again
+            if podState.sharedWithAnotherController {
+                needsSessionEstablishment = true
+            }
             self.manager = manager
             delegate?.omnipodPeripheralWasRestored(manager: manager)
         }
