@@ -383,7 +383,8 @@ class BlePodComms: PodComms {
                 let pending = podState!.unacknowledgedCommand
                 if podState!.resolveAfterSessionResync() {
                     let dropped = pending.map { " · unconfirmed \($0) dropped, nothing booked" } ?? ""
-                    omnipodLogDeviceEvent("[trust] EAP SQN RESYNC — pod=\(podSqn) ours=\(eapSeq): another controller may have run this shared pod [sqn-resync]\(dropped)")
+                    let refused = podState!.foreignSessionDetectedAt != nil ? " · another controller is using it: no session until taken again" : ""
+                    omnipodLogDeviceEvent("[trust] EAP SQN RESYNC — pod=\(podSqn) ours=\(eapSeq): another controller may have run this shared pod [sqn-resync]\(dropped)\(refused)")
                 }
             }
             return nil
@@ -407,6 +408,7 @@ class BlePodComms: PodComms {
             if podState != nil {
                 log.bleDebug("@@@ Setting podState transport state to %{public}@", transportState.inlineDescription)
                 podState!.bleMessageTransportState = transportState
+                podState!.expectsSessionResync = false
             } else {
                 log.bleDebug("@@@ Used keys %{public}@ to create transport state %{public}@", String(describing: keys), transportState.inlineDescription)
             }
@@ -422,8 +424,11 @@ class BlePodComms: PodComms {
             throw PodCommsError.noPodPaired
         }
 
+        // A handshake would move the pod's counter on, and the controller using the pod would take it for ours.
+        guard podState!.foreignSessionDetectedAt == nil else { throw PodCommsError.podUsedByAnotherController }
         let mts = try establishSession(on: manager, ltk: ltk, eapSeq: podState!.incrementEapSeq())
         if mts == nil {
+            guard podState!.foreignSessionDetectedAt == nil else { throw PodCommsError.podUsedByAnotherController }
             let mts = try establishSession(on: manager, ltk: ltk, eapSeq: podState!.incrementEapSeq())
             if mts == nil {
                 throw PodCommsError.diagnosticMessage(str: "Received resynchronization SQN for the second time")
@@ -795,6 +800,11 @@ class BlePodComms: PodComms {
 
             guard self.podState != nil else {
                 block(.failure(PodCommsError.noPodPaired))
+                return
+            }
+
+            guard self.podState?.foreignSessionDetectedAt == nil else {
+                block(.failure(PodCommsError.podUsedByAnotherController))
                 return
             }
 

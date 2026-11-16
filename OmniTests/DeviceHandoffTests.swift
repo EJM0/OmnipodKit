@@ -395,6 +395,127 @@ final class DeviceHandoffTests: XCTestCase {
         XCTAssertEqual(pod.localizedFaultDescription, "Pod Error")
     }
 
+    // MARK: - Foreign session
+
+    /// The pod's EAP counter, as the pod keeps it: a handshake has to be above it, or the pod answers with a
+    /// resync to its own value and the handshake changes nothing. `runSession` follows
+    /// `BlePodComms.establishNewSession` and the session refusals; true when the session ran.
+    final class PodCounter {
+        var sqn: Int
+        init(sqn: Int) { self.sqn = sqn }
+
+        func runSession(_ pod: inout PodState) -> Bool {
+            guard pod.foreignSessionDetectedAt == nil else { return false }
+            for _ in 0 ..< 2 {
+                let sent = pod.incrementEapSeq()
+                if sent > sqn {
+                    sqn = sent
+                    pod.expectsSessionResync = false
+                    return true
+                }
+                pod.bleMessageTransportState.eapSeq = sqn
+                _ = pod.resolveAfterSessionResync()
+                guard pod.foreignSessionDetectedAt == nil else { return false }
+            }
+            return false
+        }
+    }
+
+    /// Taking control, as `OmniPumpManager.takeControl()` does it to the pod.
+    func take(_ pod: PodState) throws -> PodState {
+        let comms = PodComms(podState: pod, podType: dashType)
+        comms.expectSessionResync()
+        return try XCTUnwrap(comms.podState)
+    }
+
+    /// The phone hands the pod to the watch; both have run sessions on it since.
+    func lend(counter: PodCounter) throws -> (phone: PodState, watch: PodState) {
+        var phone = makePodState()
+        phone.unacknowledgedCommand = nil
+        let configuration = export(makeState(pod: phone))
+        phone.sharedWithAnotherController = true // as exportConfiguration() marks it
+        XCTAssertTrue(counter.runSession(&phone), "a session after the export, such as cancelling the temp")
+
+        var watch = try XCTUnwrap(try adopt(configuration).podState)
+        XCTAssertTrue(counter.runSession(&watch), "the resync shows the phone's session before the hand-off")
+        XCTAssertTrue(counter.runSession(&watch))
+        XCTAssertNil(watch.foreignSessionDetectedAt, "expected after an adopt")
+        return (phone, watch)
+    }
+
+    func testAHandOffAndAHandBackFindNoForeignSession() throws {
+        let counter = PodCounter(sqn: 41)
+        var (phone, watch) = try lend(counter: counter)
+
+        phone = try take(phone)
+        XCTAssertTrue(counter.runSession(&phone), "the resync shows the watch's sessions before the take")
+        XCTAssertTrue(counter.runSession(&phone))
+        XCTAssertNil(phone.foreignSessionDetectedAt)
+        XCTAssertNil(watch.foreignSessionDetectedAt)
+    }
+
+    /// Take Back while the watch is out of reach: the watch doesn't know, and its next session finds the phone's.
+    func testAControllerThatLostThePodRunsNoSessionAndSaysSo() throws {
+        let counter = PodCounter(sqn: 41)
+        var (phone, watch) = try lend(counter: counter)
+        phone = try take(phone)
+        XCTAssertTrue(counter.runSession(&phone))
+
+        let before = counter.sqn
+        XCTAssertFalse(counter.runSession(&watch), "no command of any kind, insulin-adding or not")
+        XCTAssertNotNil(watch.foreignSessionDetectedAt, "the host can see it")
+        XCTAssertEqual(counter.sqn, before, "no second handshake: the phone's counter still leads")
+        XCTAssertFalse(counter.runSession(&watch), "still refused, without touching the pod")
+
+        XCTAssertTrue(counter.runSession(&phone), "the phone sees no foreign session")
+        XCTAssertNil(phone.foreignSessionDetectedAt)
+    }
+
+    /// The stale watch reaches the pod first after the phone's take. That one session can't be told apart from
+    /// the watch's own, so it runs (the phone's audit has to find its insulin); the next is refused.
+    func testTheStaleControllerHandshakingFirstAfterATakeIsRefusedFromItsNextSession() throws {
+        let counter = PodCounter(sqn: 41)
+        var (phone, watch) = try lend(counter: counter)
+        phone = try take(phone)
+
+        XCTAssertTrue(counter.runSession(&watch), "a limit: nothing on the pod shows the take yet")
+        XCTAssertTrue(counter.runSession(&phone), "the take expects the resync the watch's session causes")
+        XCTAssertNil(phone.foreignSessionDetectedAt)
+
+        XCTAssertFalse(counter.runSession(&watch))
+        XCTAssertNotNil(watch.foreignSessionDetectedAt)
+        XCTAssertTrue(counter.runSession(&phone))
+        XCTAssertNil(phone.foreignSessionDetectedAt, "the owner keeps dosing")
+    }
+
+    func testTheRefusalSurvivesARelaunchAndATakeLiftsIt() throws {
+        var pod = makePodState()
+        pod.sharedWithAnotherController = true
+        XCTAssertTrue(pod.resolveAfterSessionResync())
+        let detectedAt = try XCTUnwrap(pod.foreignSessionDetectedAt)
+
+        let relaunched = try XCTUnwrap(PodState(rawValue: pod.rawValue))
+        XCTAssertEqual(relaunched.foreignSessionDetectedAt, detectedAt)
+
+        let taken = try take(relaunched)
+        XCTAssertNil(taken.foreignSessionDetectedAt, "taking control is the host's claim")
+        XCTAssertTrue(taken.expectsSessionResync)
+        XCTAssertEqual(try XCTUnwrap(PodState(rawValue: taken.rawValue)).expectsSessionResync, true)
+    }
+
+    func testAnExportCarriesNoForeignSessionAndTheAdopterExpectsAResync() throws {
+        var pod = makePodState()
+        pod.foreignSessionDetectedAt = Date()
+        pod.expectsSessionResync = true
+        let configuration = export(makeState(pod: pod))
+        XCTAssertNil(exportedPod(configuration)?["foreignSessionDetectedAt"])
+        XCTAssertNil(exportedPod(configuration)?["expectsSessionResync"])
+
+        let adopted = try XCTUnwrap(try adopt(configuration).podState)
+        XCTAssertTrue(adopted.expectsSessionResync)
+        XCTAssertNil(adopted.foreignSessionDetectedAt)
+    }
+
     // MARK: -
 
     func status(_ deliveryStatus: DeliveryStatus, bolusNotDelivered: Double = 0) -> StatusResponse {

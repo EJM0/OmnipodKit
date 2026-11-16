@@ -148,6 +148,14 @@ public struct PodState: RawRepresentable, Equatable, CustomDebugStringConvertibl
     /// resyncs as before. Kept for the pod's life.
     var sharedWithAnotherController: Bool = false
 
+    /// This controller has just adopted or taken the pod, so the next resync is expected: it shows the
+    /// other controller's sessions from before. Cleared once a session is established.
+    var expectsSessionResync: Bool = false
+
+    /// A resync after this controller adopted or took the pod: another controller is using it. No
+    /// session runs until the host takes control again.
+    var foreignSessionDetectedAt: Date?
+
 
     init(
         address: UInt32,
@@ -667,6 +675,8 @@ public struct PodState: RawRepresentable, Equatable, CustomDebugStringConvertibl
 
         self.untrackedDeliveryIsForeign = rawValue["untrackedDeliveryIsForeign"] as? Bool ?? false
         self.sharedWithAnotherController = rawValue["sharedWithAnotherController"] as? Bool ?? false
+        self.expectsSessionResync = rawValue["expectsSessionResync"] as? Bool ?? false
+        self.foreignSessionDetectedAt = rawValue["foreignSessionDetectedAt"] as? Date
 
         if let podTypeRaw = rawValue["podType"] as? UInt8 {
             self.podType = PodType(rawValue: podTypeRaw)
@@ -775,6 +785,10 @@ public struct PodState: RawRepresentable, Equatable, CustomDebugStringConvertibl
         if sharedWithAnotherController {
             rawValue["sharedWithAnotherController"] = true
         }
+        if expectsSessionResync {
+            rawValue["expectsSessionResync"] = true
+        }
+        rawValue["foreignSessionDetectedAt"] = foreignSessionDetectedAt
 
         if configuredAlerts.count > 0 {
             let rawConfiguredAlerts = Dictionary(uniqueKeysWithValues:

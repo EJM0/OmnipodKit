@@ -84,6 +84,7 @@ extension OmniPumpManagerState {
         pod?.bleIdentifier = handle
         pod?.untrackedDeliveryIsForeign = true
         pod?.sharedWithAnotherController = true
+        pod?.expectsSessionResync = true
         state.updatePodStateFromPodComms(pod)
         state.podConnectionReleased = false
         state.configuredByAnotherController = true
@@ -113,6 +114,8 @@ extension PodState {
         pod.unacknowledgedCommand = nil
         pod.lastDeliveryStatusReceived = nil
         pod.untrackedDeliveryIsForeign = false
+        pod.expectsSessionResync = false
+        pod.foreignSessionDetectedAt = nil
         pod.bleMessageTransportState = BleMessageTransportState(ck: nil, noncePrefix: nil,
                                                                 eapSeq: bleMessageTransportState.eapSeq,
                                                                 messageNumber: bleMessageTransportState.messageNumber)
@@ -137,10 +140,14 @@ extension PodState {
     /// The pod's session counter was found ahead of this controller's. On a shared pod, another
     /// controller may have run it: resolve as after foreign control, keeping in-flight copies. A pod
     /// never shared resyncs as before: only this controller's own counter, saved late, can be
-    /// behind. Returns whether another controller may have run the pod.
+    /// behind. Unless this controller has just adopted or taken the pod, another controller is using
+    /// it: see `foreignSessionDetectedAt`. Returns whether another controller may have run the pod.
     mutating func resolveAfterSessionResync() -> Bool {
         guard sharedWithAnotherController else { return false }
         resolveAfterForeignControl(dropInFlight: false)
+        if !expectsSessionResync, foreignSessionDetectedAt == nil {
+            foreignSessionDetectedAt = Date()
+        }
         return true
     }
 }
@@ -159,6 +166,15 @@ extension PodComms {
     func markSharedWithAnotherController() {
         podStateLock.lock()
         podState?.sharedWithAnotherController = true
+        podStateLock.unlock()
+    }
+
+    /// A take: the next resync shows the other controller's sessions before it, and a foreign session
+    /// found earlier no longer stops this controller. Waits out a session in progress.
+    func expectSessionResync() {
+        podStateLock.lock()
+        podState?.expectsSessionResync = true
+        podState?.foreignSessionDetectedAt = nil
         podStateLock.unlock()
     }
 }
@@ -196,7 +212,9 @@ extension OmniPumpManager: ExclusiveDeviceControl {
     /// manager needs. It connects with or without a release here: another controller can take the pod
     /// without this one releasing it (a watch's offline start), and the take's settle waits for this
     /// link.
+    /// Taking control again is also how the host lifts a refusal after a foreign session.
     public func takeControl() {
+        podComms.expectSessionResync()
         if state.podConnectionReleased {
             resumeControl()
         }
@@ -229,6 +247,12 @@ extension OmniPumpManager: ExclusiveDeviceControl {
             state.podConnectionReleased = false
             state.inFlightDosesInheritedAway = false
         }
+    }
+
+    /// When another controller was found using the pod after this one adopted or took it. While set,
+    /// this manager runs no session and sends the pod nothing; the host is told through the state update.
+    public var foreignSessionDetectedAt: Date? {
+        state.podState?.foreignSessionDetectedAt
     }
 
     public var isControlReady: Bool {

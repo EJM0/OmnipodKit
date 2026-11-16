@@ -1773,6 +1773,11 @@ extension OmniPumpManager {
             block(.failure(.podNotConnected))
             return
         }
+        if state.podState?.foreignSessionDetectedAt != nil {
+            log.default("'%{public}@' refused — another controller has used the pod", name)
+            block(.failure(.podUsedByAnotherController))
+            return
+        }
         if let blePodComms = self.podComms as? BlePodComms {
             blePodComms.bleRunSession(withName: name, block)
         } else if let erosPodComms = self.podComms as? ErosPodComms {
