@@ -383,7 +383,7 @@ class BlePodComms: PodComms {
                 let pending = podState!.unacknowledgedCommand
                 if podState!.resolveAfterSessionResync() {
                     let dropped = pending.map { " · unconfirmed \($0) dropped, nothing booked" } ?? ""
-                    let refused = podState!.foreignSessionDetectedAt != nil ? " · another controller is using it: no session until taken again" : ""
+                    let refused = podState!.refusesSessions ? " · another controller is using it: no session until taken again" : ""
                     omnipodLogDeviceEvent("[trust] EAP SQN RESYNC — pod=\(podSqn) ours=\(eapSeq): another controller may have run this shared pod [sqn-resync]\(dropped)\(refused)")
                 }
             }
@@ -425,10 +425,10 @@ class BlePodComms: PodComms {
         }
 
         // A handshake would move the pod's counter on, and the controller using the pod would take it for ours.
-        guard podState!.foreignSessionDetectedAt == nil else { throw PodCommsError.podUsedByAnotherController }
+        guard !podState!.refusesSessions else { throw PodCommsError.podUsedByAnotherController }
         let mts = try establishSession(on: manager, ltk: ltk, eapSeq: podState!.incrementEapSeq())
         if mts == nil {
-            guard podState!.foreignSessionDetectedAt == nil else { throw PodCommsError.podUsedByAnotherController }
+            guard !podState!.refusesSessions else { throw PodCommsError.podUsedByAnotherController }
             let mts = try establishSession(on: manager, ltk: ltk, eapSeq: podState!.incrementEapSeq())
             if mts == nil {
                 throw PodCommsError.diagnosticMessage(str: "Received resynchronization SQN for the second time")
@@ -803,7 +803,7 @@ class BlePodComms: PodComms {
                 return
             }
 
-            guard self.podState?.foreignSessionDetectedAt == nil else {
+            guard self.podState?.refusesSessions != true else {
                 block(.failure(PodCommsError.podUsedByAnotherController))
                 return
             }

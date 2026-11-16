@@ -152,9 +152,18 @@ public struct PodState: RawRepresentable, Equatable, CustomDebugStringConvertibl
     /// other controller's sessions from before. Cleared once a session is established.
     var expectsSessionResync: Bool = false
 
-    /// A resync after this controller adopted or took the pod: another controller is using it. No
-    /// session runs until the host takes control again.
+    /// The last resync after this controller adopted or took the pod: another controller is using it.
     var foreignSessionDetectedAt: Date?
+
+    /// The host took the pod from a controller it knows it superseded, so that controller's later
+    /// sessions are reported but don't stop this one.
+    var supersededAnotherController: Bool = false
+
+    /// Another controller is using the pod and this one never claimed it over that controller: no
+    /// session runs until the host takes control again.
+    var refusesSessions: Bool {
+        foreignSessionDetectedAt != nil && !supersededAnotherController
+    }
 
 
     init(
@@ -677,6 +686,7 @@ public struct PodState: RawRepresentable, Equatable, CustomDebugStringConvertibl
         self.sharedWithAnotherController = rawValue["sharedWithAnotherController"] as? Bool ?? false
         self.expectsSessionResync = rawValue["expectsSessionResync"] as? Bool ?? false
         self.foreignSessionDetectedAt = rawValue["foreignSessionDetectedAt"] as? Date
+        self.supersededAnotherController = rawValue["supersededAnotherController"] as? Bool ?? false
 
         if let podTypeRaw = rawValue["podType"] as? UInt8 {
             self.podType = PodType(rawValue: podTypeRaw)
@@ -789,6 +799,9 @@ public struct PodState: RawRepresentable, Equatable, CustomDebugStringConvertibl
             rawValue["expectsSessionResync"] = true
         }
         rawValue["foreignSessionDetectedAt"] = foreignSessionDetectedAt
+        if supersededAnotherController {
+            rawValue["supersededAnotherController"] = true
+        }
 
         if configuredAlerts.count > 0 {
             let rawConfiguredAlerts = Dictionary(uniqueKeysWithValues:

@@ -1773,7 +1773,7 @@ extension OmniPumpManager {
             block(.failure(.podNotConnected))
             return
         }
-        if state.podState?.foreignSessionDetectedAt != nil {
+        if state.podState?.refusesSessions == true {
             log.default("'%{public}@' refused — another controller has used the pod", name)
             block(.failure(.podUsedByAnotherController))
             return
