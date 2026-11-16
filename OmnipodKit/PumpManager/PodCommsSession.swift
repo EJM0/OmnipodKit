@@ -185,7 +185,7 @@ extension PodCommsError: LocalizedError {
         case .noCertificateFound:
             return LocalizedString("Retrieve an Omnipod 5 Pod Certificate to continue.", comment: "Recovery suggestion with missing certificate")
         case .podUsedByAnotherController:
-            return nil
+            return LocalizedString("Take control of the pod on this device, or keep using the device that has it.", comment: "Recovery suggestion when another controller has used a shared pod")
         }
     }
 

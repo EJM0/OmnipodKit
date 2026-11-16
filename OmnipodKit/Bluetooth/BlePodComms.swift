@@ -42,9 +42,9 @@ class BlePodComms: PodComms {
 
     override init(podState: PodState?, podType: PodType, myId: UInt32 = 0, podId: UInt32 = 0) {
         super.init(podState: podState, podType: podType, myId: myId, podId: podId)
-        // A pod handed over by another controller carries no session keys (PodState.sharedFacts):
-        // nothing runs on it until a handshake makes them.
-        if hasLTK, podState?.bleMessageTransportState.ck?.isEmpty ?? true {
+        // A pod handed over by another controller carries no session keys (PodState.sharedFacts), and on a
+        // shared pod saved keys may predate another controller's sessions: nothing runs until a handshake.
+        if hasLTK, podState?.sharedWithAnotherController == true || (podState?.bleMessageTransportState.ck?.isEmpty ?? true) {
             needsSessionEstablishment = true
         }
         bluetoothManager = BluetoothManager(podType: podType)
@@ -110,6 +110,12 @@ class BlePodComms: PodComms {
         podStateLock.lock()
         podState?.resolveAfterForeignControl(dropInFlight: dropInFlight)
         podStateLock.unlock()
+    }
+
+    /// Another controller is using the pod: let go of its one link so that controller can reach it.
+    private func refuseSessions() -> PodCommsError {
+        releaseConnection()
+        return .podUsedByAnotherController
     }
 
     /// Resume bidding after a release; the session re-establishes on next contact (EAP SQN resync).
@@ -378,10 +384,9 @@ class BlePodComms: PodComms {
             if podState != nil {
                 let podSqn = try keys.synchronizedEapSqn.toInt()
                 log.bleDebug("@@@ Updating EAP SQN to: %d", podSqn)
-                podState!.bleMessageTransportState.eapSeq = podSqn
                 // Any resync counts: after a single foreign session the pod's counter equals the one just sent.
                 let pending = podState!.unacknowledgedCommand
-                if podState!.resolveAfterSessionResync() {
+                if podState!.handshakeResynced(to: podSqn, lastAcceptedHere: AcceptedEapSqn.value(for: podState!)) {
                     let dropped = pending.map { " · unconfirmed \($0) dropped, nothing booked" } ?? ""
                     let refused = podState!.refusesSessions ? " · another controller is using it: no session until taken again" : ""
                     omnipodLogDeviceEvent("[trust] EAP SQN RESYNC — pod=\(podSqn) ours=\(eapSeq): another controller may have run this shared pod [sqn-resync]\(dropped)\(refused)")
@@ -408,7 +413,8 @@ class BlePodComms: PodComms {
             if podState != nil {
                 log.bleDebug("@@@ Setting podState transport state to %{public}@", transportState.inlineDescription)
                 podState!.bleMessageTransportState = transportState
-                podState!.expectsSessionResync = false
+                podState!.sessionEstablished()
+                AcceptedEapSqn.save(eapSeq, for: podState!)
             } else {
                 log.bleDebug("@@@ Used keys %{public}@ to create transport state %{public}@", String(describing: keys), transportState.inlineDescription)
             }
@@ -424,12 +430,12 @@ class BlePodComms: PodComms {
             throw PodCommsError.noPodPaired
         }
 
-        // A handshake would move the pod's counter on, and the controller using the pod would take it for ours.
-        guard !podState!.refusesSessions else { throw PodCommsError.podUsedByAnotherController }
-        let mts = try establishSession(on: manager, ltk: ltk, eapSeq: podState!.incrementEapSeq())
+        // A refused handshake would move the pod's counter on, and the controller using the pod would take it for ours.
+        guard let sqn = podState!.nextHandshakeSqn() else { throw refuseSessions() }
+        let mts = try establishSession(on: manager, ltk: ltk, eapSeq: sqn)
         if mts == nil {
-            guard !podState!.refusesSessions else { throw PodCommsError.podUsedByAnotherController }
-            let mts = try establishSession(on: manager, ltk: ltk, eapSeq: podState!.incrementEapSeq())
+            guard let retrySqn = podState!.nextHandshakeSqn() else { throw refuseSessions() }
+            let mts = try establishSession(on: manager, ltk: ltk, eapSeq: retrySqn)
             if mts == nil {
                 throw PodCommsError.diagnosticMessage(str: "Received resynchronization SQN for the second time")
             }
@@ -804,7 +810,7 @@ class BlePodComms: PodComms {
             }
 
             guard self.podState?.refusesSessions != true else {
-                block(.failure(PodCommsError.podUsedByAnotherController))
+                block(.failure(self.refuseSessions()))
                 return
             }
 
@@ -856,10 +862,6 @@ extension BlePodComms: OmniConnectionDelegate {
     func omnipodPeripheralWasRestored(manager: PeripheralManager) {
         if let podState = podState, manager.peripheral.identifier.uuidString == podState.bleIdentifier {
             log.bleDebug("omnipodPeripheralWasRestored for %@", manager.peripheral.identifier.uuidString)
-            // the saved session keys may predate another controller's sessions: a shared pod handshakes again
-            if podState.sharedWithAnotherController {
-                needsSessionEstablishment = true
-            }
             self.manager = manager
             delegate?.omnipodPeripheralWasRestored(manager: manager)
         }
@@ -959,5 +961,21 @@ extension BlePodComms: PodCommsSessionDelegate {
 
         podCommsSession.assertOnSessionQueue()
         podState = state
+    }
+}
+
+/// The last EAP SQN the pod accepted from this controller, saved at once: the pod state the host saves can lag,
+/// and a counter behind the pod would then look like another controller's session.
+enum AcceptedEapSqn {
+    private static func key(_ pod: PodState) -> String {
+        "com.loopkit.OmnipodKit.acceptedEapSqn.\(pod.lotNo).\(pod.lotSeq)"
+    }
+
+    static func value(for pod: PodState) -> Int? {
+        UserDefaults.standard.object(forKey: key(pod)) as? Int
+    }
+
+    static func save(_ sqn: Int, for pod: PodState) {
+        UserDefaults.standard.set(sqn, forKey: key(pod))
     }
 }

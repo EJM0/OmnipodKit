@@ -155,9 +155,9 @@ public struct PodState: RawRepresentable, Equatable, CustomDebugStringConvertibl
     /// The last resync after this controller adopted or took the pod: another controller is using it.
     var foreignSessionDetectedAt: Date?
 
-    /// Until then, the host has taken the pod from a controller that may not know yet: that controller's
-    /// sessions are reported but don't stop this one.
-    var supersedesAnotherControllerUntil: Date?
+    /// The host has taken the pod from a controller that may not know yet: while it covers now, that
+    /// controller's sessions are reported but don't stop this one.
+    var supersedingTake: SupersedingTake?
 
     /// A foreign session outside a superseding take: no session runs until the host takes control again.
     var refusesSessions: Bool = false
@@ -683,7 +683,7 @@ public struct PodState: RawRepresentable, Equatable, CustomDebugStringConvertibl
         self.sharedWithAnotherController = rawValue["sharedWithAnotherController"] as? Bool ?? false
         self.expectsSessionResync = rawValue["expectsSessionResync"] as? Bool ?? false
         self.foreignSessionDetectedAt = rawValue["foreignSessionDetectedAt"] as? Date
-        self.supersedesAnotherControllerUntil = rawValue["supersedesAnotherControllerUntil"] as? Date
+        self.supersedingTake = (rawValue["supersedingTake"] as? SupersedingTake.RawValue).flatMap(SupersedingTake.init(rawValue:))
         self.refusesSessions = rawValue["refusesSessions"] as? Bool ?? false
 
         if let podTypeRaw = rawValue["podType"] as? UInt8 {
@@ -797,7 +797,7 @@ public struct PodState: RawRepresentable, Equatable, CustomDebugStringConvertibl
             rawValue["expectsSessionResync"] = true
         }
         rawValue["foreignSessionDetectedAt"] = foreignSessionDetectedAt
-        rawValue["supersedesAnotherControllerUntil"] = supersedesAnotherControllerUntil
+        rawValue["supersedingTake"] = supersedingTake?.rawValue
         if refusesSessions {
             rawValue["refusesSessions"] = true
         }
@@ -861,6 +861,10 @@ public struct PodState: RawRepresentable, Equatable, CustomDebugStringConvertibl
             "* configuredAlerts: \(configuredAlertsString(configuredAlerts: configuredAlerts))",
             "* insulinType: \(optionalString(insulinType))",
             "* messageTransportState: \(podType.isEros ? String(describing: erosMessageTransportState) : String(describing: bleMessageTransportState))",
+            "* sharedWithAnotherController: \(sharedWithAnotherController)",
+            "* foreignSessionDetectedAt: \(optionalString(foreignSessionDetectedAt))",
+            "* refusesSessions: \(refusesSessions)",
+            "* supersedingTake: \(optionalString(supersedingTake))",
             "* pdmRef: \(optionalString(fault?.pdmRef))",
             "* fault: \(optionalString(fault))",
         ].joined(separator: "\n")
