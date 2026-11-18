@@ -937,6 +937,12 @@ extension BlePodComms: PeripheralManagerDelegate {
                 return
             }
 
+            // Another controller is using the pod: hang up before hello, the link is theirs.
+            guard podState?.refusesSessions != true else {
+                manager.noteSetupStep("another controller is using the pod, setup skipped")
+                throw refuseSessions()
+            }
+
             do {
                 try manager.setupStep("hello") { try manager.sendHello(myId: myId) }
                 // Seemingly this cannot be done before the hello command, or the pod disconnects
