@@ -2727,6 +2727,20 @@ extension OmniPumpManager: PumpManager {
         statusObservers.removeElement(observer)
     }
 
+    /// Reads the pod's status if it is older than `age`. From kristinkand/OmnipodKit.
+    public func readStatusIfOlder(than age: TimeInterval, completion: @escaping (Date?) -> Void) {
+        guard !mocksPod, state.hasActivePod,
+              -(state.lastPumpDataReportDate ?? .distantPast).timeIntervalSinceNow > age
+        else {
+            completion(lastSync)
+            return
+        }
+        log.default("Fetching status ahead of the next wake: pumpData older than %{public}@", age.timeIntervalStr)
+        getPodStatus(canOptimize: true) { _ in
+            completion(self.lastSync)
+        }
+    }
+
     public func ensureCurrentPumpData(completion: ((Date?) -> Void)?) {
         // A mocked pod has no radio, so a status fetch would always fail: stamp a fresh measurement
         // and report now, as refreshDeliveredUnits does.
